@@ -27,6 +27,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config \
+            libfontconfig1-dev \
+            libfreetype-dev \
             libwayland-dev \
             libxkbcommon-dev \
             libgstreamer1.0-dev \
@@ -69,6 +71,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config \
+            libfontconfig1-dev \
+            libfreetype-dev \
             libwayland-dev \
             libxkbcommon-dev \
             libgstreamer1.0-dev \
