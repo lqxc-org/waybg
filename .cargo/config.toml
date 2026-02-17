@@ -1,0 +1,4 @@
+[alias]
+xtask = "run -p xtask --"
+normal-tests = "xtask normal-tests"
+niri-tests = "xtask niri-tests"

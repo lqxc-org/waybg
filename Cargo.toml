@@ -1,0 +1,20 @@
+[package]
+name = "waystream"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = [".", "xtask"]
+
+[dependencies]
+chrono = "0.4.43"
+clap = { version = "4.5.58", features = ["derive"] }
+freya = "0.4.0-rc.9"
+gstreamer = "0.24.4"
+serde = { version = "1.0.228", features = ["derive"] }
+smithay-client-toolkit = "0.20.0"
+toml = "1.0.1"
+
+[dev-dependencies]
+image = { version = "0.25.9", default-features = false, features = ["png"] }
+tempfile = "3.25.0"
