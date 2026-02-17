@@ -1,0 +1,185 @@
+name: CI and Release
+
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: fmt + lint + tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo normal-tests
+
+  package:
+    name: Build artifact
+    runs-on: ubuntu-latest
+    needs: ci
+    outputs:
+      crate_version: ${{ steps.version.outputs.crate_version }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Read crate version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          crate_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -n1)"
+          if [[ -z "${crate_version}" ]]; then
+            echo "Failed to parse version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "crate_version=${crate_version}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=v${crate_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build release binary
+        run: cargo build --release --locked --bin waystream
+
+      - name: Create release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          package_name="waystream-${{ steps.version.outputs.crate_version }}-linux-x86_64"
+          mkdir -p "dist/${package_name}"
+          cp target/release/waystream "dist/${package_name}/waystream"
+          cp README.md "dist/${package_name}/README.md"
+          tar -czf "dist/${package_name}.tar.gz" -C dist "${package_name}"
+          sha256sum "dist/${package_name}.tar.gz" > dist/SHA256SUMS.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: waystream-dist-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+
+  version_gate:
+    name: Detect version change
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: package
+    outputs:
+      changed: ${{ steps.detect.outputs.changed }}
+      previous_version: ${{ steps.detect.outputs.previous_version }}
+      current_version: ${{ steps.detect.outputs.current_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Cargo.toml version change
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -n1)"
+          previous_version=""
+          changed="false"
+
+          before_sha="${{ github.event.before }}"
+          if [[ "${before_sha}" != "0000000000000000000000000000000000000000" ]]; then
+            if git cat-file -e "${before_sha}:Cargo.toml" 2>/dev/null; then
+              previous_version="$(git show "${before_sha}:Cargo.toml" | sed -nE 's/^version = "([^"]+)"/\1/p' | head -n1)"
+            fi
+          fi
+
+          if [[ -n "${current_version}" && "${current_version}" != "${previous_version}" ]]; then
+            changed="true"
+          fi
+
+          echo "previous_version=${previous_version}" >> "${GITHUB_OUTPUT}"
+          echo "current_version=${current_version}" >> "${GITHUB_OUTPUT}"
+          echo "changed=${changed}" >> "${GITHUB_OUTPUT}"
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [package, version_gate]
+    if: github.event_name == 'push' && needs.version_gate.outputs.changed == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: waystream-dist-${{ github.sha }}
+          path: dist
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.package.outputs.release_tag }}
+          name: ${{ needs.package.outputs.release_tag }}
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
+          overwrite_files: true
