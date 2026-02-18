@@ -1,31 +1,33 @@
-use chrono::{DateTime, Datelike, Local, NaiveTime};
 use clap::{Parser, Subcommand};
-use freya::prelude::*;
+use freya::{
+    prelude::*,
+    winit::window::{Icon, WindowAttributes},
+};
 use gst::prelude::*;
 use gstreamer as gst;
-use serde::Deserialize;
 use smithay_client_toolkit::reexports::client::Connection;
 use std::{
-    env,
-    error::Error,
-    fs, io,
+    env, io,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
     time::Duration,
 };
+use waybg_core::{
+    AutoController, DynError, FsOverrideStore, OverrideStore, PlaybackLauncher, PlaybackProcess,
+    Profile, ProfilesConfig, SystemTimeProvider, resolve_override_path,
+};
 
-type DynError = Box<dyn Error>;
+const APP_NAME: &str = "Waybg";
+const APP_ID: &str = "org.lqxc.waybg";
+const APP_ICON_URL: &str = "https://collects-cdn-test.lqxclqxc.com/public/collects/101-oldchicken-stickers/items/019c173b-b24a-7f1a-ad35-d1f62ae38b72";
+const DEFAULT_CONFIG: &str = "profiles.toml";
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "waystream",
-    version,
-    about = "Wayland video wallpaper controller"
-)]
+#[command(name = "waybg", version, about = "Wayland video wallpaper controller")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -38,12 +40,12 @@ enum Commands {
     },
     /// Run automatic profile switching loop based on schedule and manual override.
     Auto {
-        #[arg(long, default_value = "profiles.toml")]
+        #[arg(long, default_value = DEFAULT_CONFIG)]
         config: PathBuf,
     },
     /// Open Freya UI for previewing and selecting profiles.
     Gui {
-        #[arg(long, default_value = "profiles.toml")]
+        #[arg(long, default_value = DEFAULT_CONFIG)]
         config: PathBuf,
     },
     /// Write a starter profiles config file.
@@ -53,47 +55,13 @@ enum Commands {
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct ProfilesConfig {
-    #[serde(default)]
-    settings: Settings,
-    profiles: Vec<Profile>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-struct Settings {
-    #[serde(default = "default_check_interval_seconds")]
-    check_interval_seconds: u64,
-    #[serde(default)]
-    default_profile: Option<String>,
-    #[serde(default)]
-    override_file: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct Profile {
-    name: String,
-    video: String,
-    #[serde(default)]
-    schedule: Option<ScheduleWindow>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ScheduleWindow {
-    start: String,
-    end: String,
-    #[serde(default)]
-    weekdays: Vec<u32>,
-}
-
-fn default_check_interval_seconds() -> u64 {
-    15
-}
-
 fn main() -> Result<(), DynError> {
     let cli = Cli::parse();
+    let command = cli.command.unwrap_or(Commands::Gui {
+        config: PathBuf::from(DEFAULT_CONFIG),
+    });
 
-    match cli.command {
+    match command {
         Commands::Play {
             input,
             loop_playback,
@@ -207,41 +175,99 @@ fn run_auto_controller(config_path: &Path) -> Result<(), DynError> {
         interval_seconds
     );
 
-    let mut active_profile_name: Option<String> = None;
-    let mut running_child: Option<Child> = None;
+    let launcher = CommandPlaybackLauncher;
+    let store = FsOverrideStore;
+    let clock = SystemTimeProvider;
+    let mut controller = AutoController::new(launcher, store, clock);
 
     loop {
-        let manual_override = read_manual_override(&override_path)?;
-        let now = Local::now();
-        let profile = config
-            .pick_profile(manual_override.as_deref(), now)
-            .ok_or_else(|| io::Error::other("unable to resolve an active profile"))?;
-
-        if active_profile_name.as_deref() != Some(profile.name.as_str()) {
-            if let Some(mut child) = running_child.take() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-
-            running_child = Some(spawn_play_process(&profile.video, true)?);
-            active_profile_name = Some(profile.name.clone());
-
+        let tick = controller.tick(&config, &override_path)?;
+        if tick.changed {
             println!(
                 "{} active profile -> '{}' ({})",
-                now.format("%Y-%m-%d %H:%M:%S"),
-                profile.name,
-                profile.video
+                tick.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                tick.active_profile_name,
+                tick.active_video
             );
         }
-
         thread::sleep(interval);
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct CommandPlaybackLauncher;
+
+struct ChildPlayProcess {
+    child: Child,
+}
+
+impl PlaybackProcess for ChildPlayProcess {
+    fn terminate(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl PlaybackLauncher for CommandPlaybackLauncher {
+    type Process = ChildPlayProcess;
+
+    fn spawn_play_process(
+        &self,
+        input: &str,
+        loop_playback: bool,
+    ) -> Result<Self::Process, io::Error> {
+        let child = spawn_play_process(input, loop_playback)?;
+        Ok(ChildPlayProcess { child })
+    }
+}
+
 fn run_gui(config_path: PathBuf) {
-    let launch_config =
-        LaunchConfig::new().with_window(WindowConfig::new_app(WallpaperGuiRoot { config_path }));
+    let mut window = WindowConfig::new_app(WallpaperGuiRoot { config_path })
+        .with_title(APP_NAME)
+        .with_size(1024.0, 720.0)
+        .with_window_attributes(|attributes, _active_event_loop| set_app_id(attributes));
+
+    if let Some(icon) = load_remote_icon() {
+        window = window.with_icon(icon);
+    }
+
+    let launch_config = LaunchConfig::new().with_window(window);
     launch(launch_config);
+}
+
+fn set_app_id(attributes: WindowAttributes) -> WindowAttributes {
+    #[cfg(target_os = "linux")]
+    {
+        use freya::winit::platform::wayland::WindowAttributesExtWayland;
+
+        attributes.with_name(APP_ID, APP_NAME)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        attributes
+    }
+}
+
+fn load_remote_icon() -> Option<Icon> {
+    let output = Command::new("curl")
+        .args([
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--max-time",
+            "4",
+            APP_ICON_URL,
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    std::panic::catch_unwind(|| LaunchConfig::window_icon(&output.stdout)).ok()
 }
 
 #[derive(Clone, PartialEq)]
@@ -403,8 +429,9 @@ impl Component for ProfileController {
                 .map(|profile| profile.name.clone());
             match profile_name {
                 Some(profile_name) => {
+                    let store = FsOverrideStore;
                     let result =
-                        write_manual_override(&snapshot.override_path, Some(&profile_name));
+                        store.write_manual_override(&snapshot.override_path, Some(&profile_name));
                     model_apply.write().status = match result {
                         Ok(()) => format!(
                             "Manual override set to '{}'. Auto mode will pick it up.",
@@ -422,7 +449,8 @@ impl Component for ProfileController {
         let mut model_auto = model;
         let on_auto = move |_| {
             let override_path = model_auto.read().override_path.clone();
-            model_auto.write().status = match write_manual_override(&override_path, None) {
+            let store = FsOverrideStore;
+            model_auto.write().status = match store.write_manual_override(&override_path, None) {
                 Ok(()) => "Manual override cleared. Auto schedule is active.".to_string(),
                 Err(error) => format!("Failed to clear manual override: {error}"),
             };
@@ -453,7 +481,7 @@ impl Component for ProfileController {
             .spacing(10.)
             .background((17, 20, 28))
             .color((235, 235, 235))
-            .child(label().font_size(24.).text("Waystream Freya Profile Controller"))
+            .child(label().font_size(24.).text("Waybg Freya Profile Controller"))
             .child(label().text(format!("Config: {}", snapshot.config_path.display())))
             .child(label().text(format!(
                 "Override file: {}",
@@ -482,144 +510,10 @@ impl Component for ProfileController {
             .child(label().text(format!("Status: {}", snapshot.status)))
             .child(
                 label().text(
-                    "Tip: run `waystream auto --config profiles.toml` in another terminal to apply schedule/override continuously.",
+                    "Tip: run `waybg auto --config profiles.toml` in another terminal to apply schedule/override continuously.",
                 ),
             )
     }
-}
-
-impl ProfilesConfig {
-    fn load(path: &Path) -> Result<Self, DynError> {
-        let raw = fs::read_to_string(path).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("failed to read config '{}': {error}", path.display()),
-            )
-        })?;
-        let config: ProfilesConfig = toml::from_str(&raw).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("failed to parse config '{}': {error}", path.display()),
-            )
-        })?;
-        Ok(config)
-    }
-
-    fn pick_profile<'a>(
-        &'a self,
-        manual_override: Option<&str>,
-        now: DateTime<Local>,
-    ) -> Option<&'a Profile> {
-        if let Some(override_name) = manual_override
-            && let Some(profile) = self
-                .profiles
-                .iter()
-                .find(|profile| profile.name == override_name)
-        {
-            return Some(profile);
-        }
-
-        if let Some(profile) = self.profiles.iter().find(|profile| {
-            profile
-                .schedule
-                .as_ref()
-                .is_some_and(|schedule| schedule.is_active(now))
-        }) {
-            return Some(profile);
-        }
-
-        if let Some(default_profile) = self.settings.default_profile.as_deref()
-            && let Some(profile) = self
-                .profiles
-                .iter()
-                .find(|profile| profile.name == default_profile)
-        {
-            return Some(profile);
-        }
-
-        self.profiles.first()
-    }
-}
-
-impl ScheduleWindow {
-    fn is_active(&self, now: DateTime<Local>) -> bool {
-        if !self.weekdays.is_empty() {
-            let today = now.weekday().number_from_monday();
-            if !self.weekdays.contains(&today) {
-                return false;
-            }
-        }
-
-        let start = parse_hhmm(&self.start);
-        let end = parse_hhmm(&self.end);
-        let (start, end) = match (start, end) {
-            (Some(start), Some(end)) => (start, end),
-            _ => return false,
-        };
-        let current = now.time();
-
-        if start == end {
-            true
-        } else if start < end {
-            current >= start && current < end
-        } else {
-            current >= start || current < end
-        }
-    }
-}
-
-fn resolve_override_path(config_path: &Path, config: &ProfilesConfig) -> PathBuf {
-    match config.settings.override_file.as_deref() {
-        Some(path) => {
-            let custom = PathBuf::from(path);
-            if custom.is_absolute() {
-                custom
-            } else {
-                config_path
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .join(custom)
-            }
-        }
-        None => config_path.with_extension("override"),
-    }
-}
-
-fn parse_hhmm(input: &str) -> Option<NaiveTime> {
-    NaiveTime::parse_from_str(input, "%H:%M").ok()
-}
-
-fn read_manual_override(path: &Path) -> Result<Option<String>, io::Error> {
-    match fs::read_to_string(path) {
-        Ok(value) => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(trimmed.to_string()))
-            }
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
-fn write_manual_override(path: &Path, profile: Option<&str>) -> Result<(), io::Error> {
-    if let Some(profile) = profile {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, format!("{profile}\n"))?;
-    } else {
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
 }
 
 fn spawn_play_process(input: &str, loop_playback: bool) -> Result<Child, io::Error> {
@@ -691,9 +585,9 @@ video = "/absolute/path/to/fallback.mp4"
     if let Some(parent) = output.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)?;
     }
-    fs::write(output, TEMPLATE)?;
+    std::fs::write(output, TEMPLATE)?;
     println!("Wrote example config to '{}'.", output.display());
     Ok(())
 }

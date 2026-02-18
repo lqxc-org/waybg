@@ -1,4 +1,4 @@
-# waystream
+# waybg
 
 Wayland/Niri video wallpaper controller built with:
 
@@ -102,7 +102,7 @@ An integration test is available at `tests/niri_embedded.rs` to validate renderi
 Niri session via screenshot pixel matching.
 
 - It launches nested `niri`.
-- Starts `waystream play` with a generated solid-color video.
+- Starts `waybg play` with a generated solid-color video.
 - Captures a frame using `grim`.
 - Verifies red/non-black pixel ratios.
 
@@ -118,6 +118,8 @@ By default (`WAYSTREAM_E2E_NIRI` unset), this test is skipped.
 
 This repo provides Cargo aliases powered by `xtask`:
 
+- `cargo ci`:
+  runs formatter check, clippy, and normal tests (the same suite used in CI).
 - `cargo normal-tests`:
   runs `cargo test --workspace --exclude xtask -- --skip niri_embedded_session_renders_video_pixels`.
 - `cargo niri-tests`:
@@ -128,4 +130,5 @@ You can also run them directly through:
 ```bash
 cargo xtask normal-tests
 cargo xtask niri-tests
+cargo xtask ci
 ```

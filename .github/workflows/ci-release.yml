@@ -46,14 +46,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-      - name: Run tests
-        run: cargo normal-tests
+      - name: Run CI suite (xtask)
+        run: cargo ci
 
   package:
     name: Build artifact
@@ -102,24 +96,22 @@ jobs:
           echo "release_tag=v${crate_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Build release binary
-        run: cargo build --release --locked --bin waystream
+        run: cargo build --release --locked --bin waybg
 
-      - name: Create release archive
+      - name: Create Linux ELF artifact
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          package_name="waystream-${{ steps.version.outputs.crate_version }}-linux-x86_64"
-          mkdir -p "dist/${package_name}"
-          cp target/release/waystream "dist/${package_name}/waystream"
-          cp README.md "dist/${package_name}/README.md"
-          tar -czf "dist/${package_name}.tar.gz" -C dist "${package_name}"
-          sha256sum "dist/${package_name}.tar.gz" > dist/SHA256SUMS.txt
+          artifact_name="waybg-${{ steps.version.outputs.crate_version }}-linux-x86_64-elf"
+          cp target/release/waybg "dist/${artifact_name}"
+          chmod +x "dist/${artifact_name}"
+          sha256sum "dist/${artifact_name}" > dist/SHA256SUMS.txt
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: waystream-dist-${{ github.sha }}
+          name: waybg-dist-${{ github.sha }}
           path: dist/*
           if-no-files-found: error
 
@@ -174,7 +166,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
-          name: waystream-dist-${{ github.sha }}
+          name: waybg-dist-${{ github.sha }}
           path: dist
 
       - name: Create or update release
@@ -183,7 +175,7 @@ jobs:
           tag_name: ${{ needs.package.outputs.release_tag }}
           name: ${{ needs.package.outputs.release_tag }}
           files: |
-            dist/*.tar.gz
+            dist/*-linux-x86_64-elf
             dist/SHA256SUMS.txt
           generate_release_notes: true
           overwrite_files: true

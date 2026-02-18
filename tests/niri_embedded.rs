@@ -32,7 +32,7 @@ fn niri_embedded_session_renders_video_pixels() -> Result<(), Box<dyn Error>> {
     let video_path = temp_path.join("solid_red.mp4");
     let screenshot_path = temp_path.join("frame.png");
     let niri_log_path = temp_path.join("niri.log");
-    let app_log_path = temp_path.join("waystream.log");
+    let app_log_path = temp_path.join("waybg.log");
     let niri_config_path = temp_path.join("niri-test.kdl");
 
     fs::write(
@@ -45,10 +45,10 @@ fn niri_embedded_session_renders_video_pixels() -> Result<(), Box<dyn Error>> {
 
     generate_solid_color_video(&video_path, "red", 640, 360, 4)?;
 
-    let waystream_bin = waystream_binary_path()?;
+    let waybg_bin = waybg_binary_path()?;
     let script = r#"
 set -euo pipefail
-"$WAYSTREAM_BIN" play "$VIDEO_PATH" --loop-playback >"$APP_LOG" 2>&1 &
+"$WAYBG_BIN" play "$VIDEO_PATH" --loop-playback >"$APP_LOG" 2>&1 &
 APP_PID=$!
 cleanup() {
   kill "$APP_PID" 2>/dev/null || true
@@ -72,7 +72,7 @@ grim "$SCREENSHOT_PATH"
         .arg("sh")
         .arg("-lc")
         .arg(script)
-        .env("WAYSTREAM_BIN", waystream_bin)
+        .env("WAYBG_BIN", waybg_bin)
         .env("VIDEO_PATH", &video_path)
         .env("SCREENSHOT_PATH", &screenshot_path)
         .env("APP_LOG", &app_log_path)
@@ -86,7 +86,7 @@ grim "$SCREENSHOT_PATH"
         let niri_log = fs::read_to_string(&niri_log_path).unwrap_or_default();
         let app_log = fs::read_to_string(&app_log_path).unwrap_or_default();
         return Err(format!(
-            "nested niri session did not produce a screenshot: {error}\n--- niri.log ---\n{niri_log}\n--- waystream.log ---\n{app_log}"
+            "nested niri session did not produce a screenshot: {error}\n--- niri.log ---\n{niri_log}\n--- waybg.log ---\n{app_log}"
         )
         .into());
     }
@@ -98,7 +98,7 @@ grim "$SCREENSHOT_PATH"
         let niri_log = fs::read_to_string(&niri_log_path).unwrap_or_default();
         let app_log = fs::read_to_string(&app_log_path).unwrap_or_default();
         return Err(format!(
-            "no screenshot captured at '{}'\n--- niri.log ---\n{niri_log}\n--- waystream.log ---\n{app_log}",
+            "no screenshot captured at '{}'\n--- niri.log ---\n{niri_log}\n--- waybg.log ---\n{app_log}",
             screenshot_path.display()
         )
         .into());
@@ -183,13 +183,13 @@ fn generate_solid_color_video(
     Ok(())
 }
 
-fn waystream_binary_path() -> Result<PathBuf, Box<dyn Error>> {
-    env::var("CARGO_BIN_EXE_waystream")
+fn waybg_binary_path() -> Result<PathBuf, Box<dyn Error>> {
+    env::var("CARGO_BIN_EXE_waybg")
         .map(PathBuf::from)
         .map_err(|_| {
             io::Error::new(
                 io::ErrorKind::NotFound,
-                "CARGO_BIN_EXE_waystream is missing; run as integration test via cargo test",
+                "CARGO_BIN_EXE_waybg is missing; run as integration test via cargo test",
             )
         })
         .map_err(Into::into)
