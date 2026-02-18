@@ -3751,6 +3751,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "waybg"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "freya",
+ "gstreamer",
+ "image",
+ "smithay-client-toolkit 0.20.0",
+ "tempfile",
+ "waybg-core",
+]
+
+[[package]]
+name = "waybg-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "tempfile",
+ "toml 1.0.1+spec-1.1.0",
+]
+
+[[package]]
 name = "wayland-backend"
 version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3883,21 +3906,6 @@ dependencies = [
  "log",
  "once_cell",
  "pkg-config",
-]
-
-[[package]]
-name = "waystream"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "freya",
- "gstreamer",
- "image",
- "serde",
- "smithay-client-toolkit 0.20.0",
- "tempfile",
- "toml 1.0.1+spec-1.1.0",
 ]
 
 [[package]]

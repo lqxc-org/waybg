@@ -1,19 +1,22 @@
 [package]
-name = "waystream"
+name = "waybg"
 version = "0.1.0"
 edition = "2024"
+autobins = false
 
 [workspace]
-members = [".", "xtask"]
+members = [".", "crates/waybg-core", "xtask"]
 
 [dependencies]
-chrono = "0.4.43"
 clap = { version = "4.5.58", features = ["derive"] }
 freya = "0.4.0-rc.9"
 gstreamer = "0.24.4"
-serde = { version = "1.0.228", features = ["derive"] }
 smithay-client-toolkit = "0.20.0"
-toml = "1.0.1"
+waybg-core = { path = "crates/waybg-core" }
+
+[[bin]]
+name = "waybg"
+path = "src/main.rs"
 
 [dev-dependencies]
 image = { version = "0.25.9", default-features = false, features = ["png"] }

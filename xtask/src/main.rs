@@ -18,6 +18,7 @@ fn main() {
 fn run() -> Result<(), DynError> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
+        Some("ci") => ci(),
         Some("normal-tests") => normal_tests(),
         Some("niri-tests") => niri_tests(),
         Some("help") | None => {
@@ -34,8 +35,34 @@ fn run() -> Result<(), DynError> {
 
 fn print_help() {
     println!(
-        "Usage:\n  cargo xtask normal-tests\n  cargo xtask niri-tests\n\nAliases:\n  cargo normal-tests\n  cargo niri-tests"
+        "Usage:\n  cargo xtask ci\n  cargo xtask normal-tests\n  cargo xtask niri-tests\n\nAliases:\n  cargo ci\n  cargo normal-tests\n  cargo niri-tests"
     );
+}
+
+fn ci() -> Result<(), DynError> {
+    println!("[xtask] Running CI suite: fmt + clippy + normal tests");
+
+    let fmt_status = cargo_cmd(&["fmt", "--all", "--", "--check"], &[])?;
+    ensure_success("cargo fmt --all -- --check", fmt_status)?;
+
+    let clippy_status = cargo_cmd(
+        &[
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        &[],
+    )?;
+    ensure_success(
+        "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+        clippy_status,
+    )?;
+
+    normal_tests()
 }
 
 fn normal_tests() -> Result<(), DynError> {
