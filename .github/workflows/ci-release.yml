@@ -4,6 +4,7 @@ on:
   pull_request:
   merge_group:
     types: [checks_requested]
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -18,25 +19,27 @@ jobs:
   ci:
     name: fmt + lint + tests
     runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
     steps:
+      - name: Install Arch dependencies
+        run: |
+          pacman -Syu --noconfirm \
+            git \
+            gcc \
+            pkgconf \
+            fontconfig \
+            freetype2 \
+            wayland \
+            libxkbcommon \
+            gstreamer \
+            gst-plugins-base \
+            gst-plugins-good \
+            gst-plugins-bad \
+            gst-libav
+
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libfontconfig1-dev \
-            libfreetype-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-libav
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -52,29 +55,31 @@ jobs:
   package:
     name: Build artifact
     runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
     needs: ci
     outputs:
       crate_version: ${{ steps.version.outputs.crate_version }}
       release_tag: ${{ steps.version.outputs.release_tag }}
     steps:
+      - name: Install Arch dependencies
+        run: |
+          pacman -Syu --noconfirm \
+            git \
+            gcc \
+            pkgconf \
+            fontconfig \
+            freetype2 \
+            wayland \
+            libxkbcommon \
+            gstreamer \
+            gst-plugins-base \
+            gst-plugins-good \
+            gst-plugins-bad \
+            gst-libav
+
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libfontconfig1-dev \
-            libfreetype-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            gstreamer1.0-libav
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -87,23 +92,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          crate_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -n1)"
+          manifest_path="crates/waybg-cli/Cargo.toml"
+          crate_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' "${manifest_path}" | head -n1)"
           if [[ -z "${crate_version}" ]]; then
-            echo "Failed to parse version from Cargo.toml" >&2
+            echo "Failed to parse version from ${manifest_path}" >&2
             exit 1
           fi
           echo "crate_version=${crate_version}" >> "${GITHUB_OUTPUT}"
           echo "release_tag=v${crate_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Build release binary
-        run: cargo build --release --locked --bin waybg
+        run: cargo build --release --locked -p waybg-cli --bin waybg
 
       - name: Create Linux ELF artifact
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          artifact_name="waybg-${{ steps.version.outputs.crate_version }}-linux-x86_64-elf"
+          artifact_name="waybg-${{ steps.version.outputs.crate_version }}-archlinux-x86_64-elf"
           cp target/release/waybg "dist/${artifact_name}"
           chmod +x "dist/${artifact_name}"
           sha256sum "dist/${artifact_name}" > dist/SHA256SUMS.txt
@@ -111,7 +117,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: waybg-dist-${{ github.sha }}
+          name: waybg-archlinux-x86_64-${{ github.sha }}
           path: dist/*
           if-no-files-found: error
 
@@ -136,14 +142,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          current_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -n1)"
+          manifest_path="crates/waybg-cli/Cargo.toml"
+          current_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' "${manifest_path}" | head -n1)"
           previous_version=""
           changed="false"
 
           before_sha="${{ github.event.before }}"
           if [[ "${before_sha}" != "0000000000000000000000000000000000000000" ]]; then
-            if git cat-file -e "${before_sha}:Cargo.toml" 2>/dev/null; then
-              previous_version="$(git show "${before_sha}:Cargo.toml" | sed -nE 's/^version = "([^"]+)"/\1/p' | head -n1)"
+            if git cat-file -e "${before_sha}:${manifest_path}" 2>/dev/null; then
+              previous_version="$(git show "${before_sha}:${manifest_path}" | sed -nE 's/^version = "([^"]+)"/\1/p' | head -n1)"
             fi
           fi
 
@@ -166,7 +173,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
-          name: waybg-dist-${{ github.sha }}
+          name: waybg-archlinux-x86_64-${{ github.sha }}
           path: dist
 
       - name: Create or update release
@@ -175,7 +182,7 @@ jobs:
           tag_name: ${{ needs.package.outputs.release_tag }}
           name: ${{ needs.package.outputs.release_tag }}
           files: |
-            dist/*-linux-x86_64-elf
+            dist/*-archlinux-x86_64-elf
             dist/SHA256SUMS.txt
           generate_release_notes: true
           overwrite_files: true
