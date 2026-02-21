@@ -7,7 +7,10 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
 };
-use waybg_core::{FsOverrideStore, OverrideStore, Profile, ProfilesConfig, resolve_override_path};
+use waybg_core::{
+    FsOverrideStore, OverrideStore, Profile, ProfilesConfig, ensure_config_exists,
+    resolve_override_path,
+};
 
 const APP_NAME: &str = "Waybg";
 const APP_ID: &str = "org.lqxc.waybg";
@@ -114,21 +117,45 @@ struct GuiModel {
 
 impl GuiModel {
     fn load(options: GuiRuntimeOptions) -> Self {
-        match ProfilesConfig::load(&options.config_path) {
+        let GuiRuntimeOptions {
+            config_path,
+            player_executable,
+            player_prefix_args,
+        } = options;
+        let generated = match ensure_config_exists(&config_path) {
+            Ok(generated) => generated,
+            Err(error) => {
+                return Self {
+                    config_path,
+                    override_path: PathBuf::from("profiles.override"),
+                    player_executable,
+                    player_prefix_args,
+                    profiles: Vec::new(),
+                    selected: 0,
+                    status: format!("Config bootstrap failed: {error}"),
+                };
+            }
+        };
+
+        match ProfilesConfig::load(&config_path) {
             Ok(config) => Self {
-                override_path: resolve_override_path(&options.config_path, &config),
+                override_path: resolve_override_path(&config_path, &config),
                 profiles: config.profiles,
-                config_path: options.config_path,
-                player_executable: options.player_executable,
-                player_prefix_args: options.player_prefix_args,
+                config_path,
+                player_executable,
+                player_prefix_args,
                 selected: 0,
-                status: "Loaded config successfully.".to_string(),
+                status: if generated {
+                    "Generated missing config and loaded it successfully.".to_string()
+                } else {
+                    "Loaded config successfully.".to_string()
+                },
             },
             Err(error) => Self {
-                config_path: options.config_path,
+                config_path,
                 override_path: PathBuf::from("profiles.override"),
-                player_executable: options.player_executable,
-                player_prefix_args: options.player_prefix_args,
+                player_executable,
+                player_prefix_args,
                 profiles: Vec::new(),
                 selected: 0,
                 status: format!("Config load failed: {error}"),
