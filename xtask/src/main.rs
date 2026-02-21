@@ -88,11 +88,19 @@ fn normal_tests() -> Result<(), DynError> {
 fn niri_tests() -> Result<(), DynError> {
     println!("[xtask] Running embedded Niri integration test");
     let status = cargo_cmd(
-        &["test", "--test", "niri_embedded", "--", "--nocapture"],
+        &[
+            "test",
+            "-p",
+            "waybg-cli",
+            "--test",
+            "niri_embedded",
+            "--",
+            "--nocapture",
+        ],
         &[("WAYSTREAM_E2E_NIRI", "1")],
     )?;
     ensure_success(
-        "WAYSTREAM_E2E_NIRI=1 cargo test --test niri_embedded -- --nocapture",
+        "WAYSTREAM_E2E_NIRI=1 cargo test -p waybg-cli --test niri_embedded -- --nocapture",
         status,
     )
 }
