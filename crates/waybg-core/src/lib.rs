@@ -28,6 +28,7 @@ pub struct Settings {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Profile {
     pub name: String,
+    #[serde(default = "default_profile_video")]
     pub video: String,
     #[serde(default)]
     pub schedule: Option<ScheduleWindow>,
@@ -43,6 +44,52 @@ pub struct ScheduleWindow {
 
 pub fn default_check_interval_seconds() -> u64 {
     15
+}
+
+pub fn default_profile_video() -> String {
+    "blank://".to_string()
+}
+
+pub const EXAMPLE_CONFIG_TEMPLATE: &str = r#"[settings]
+check_interval_seconds = 15
+default_profile = "blank"
+# override_file = "profiles.override"
+
+[[profiles]]
+name = "day"
+video = "/absolute/path/to/day.mp4"
+[profiles.schedule]
+start = "08:00"
+end = "18:00"
+weekdays = [1, 2, 3, 4, 5]
+
+[[profiles]]
+name = "night"
+video = "/absolute/path/to/night.mp4"
+[profiles.schedule]
+start = "18:00"
+end = "08:00"
+
+[[profiles]]
+name = "blank"
+# `video` is optional. If omitted, waybg uses blank:// (solid black background).
+"#;
+
+pub fn write_example_config(output: &Path) -> Result<(), io::Error> {
+    if let Some(parent) = output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(output, EXAMPLE_CONFIG_TEMPLATE)
+}
+
+pub fn ensure_config_exists(path: &Path) -> Result<bool, io::Error> {
+    if path.exists() {
+        return Ok(false);
+    }
+    write_example_config(path)?;
+    Ok(true)
 }
 
 impl ProfilesConfig {

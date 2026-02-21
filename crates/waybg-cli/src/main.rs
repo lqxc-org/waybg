@@ -1,9 +1,6 @@
 use clap::{Parser, Subcommand};
-use std::{
-    env,
-    path::{Path, PathBuf},
-};
-use waybg_core::DynError;
+use std::{env, path::PathBuf};
+use waybg_core::{DynError, write_example_config};
 use waybg_ui::GuiRuntimeOptions;
 
 const DEFAULT_CONFIG: &str = "profiles.toml";
@@ -35,7 +32,7 @@ enum Commands {
     },
     /// Write a starter profiles config file.
     InitConfig {
-        #[arg(long, default_value = "profiles.example.toml")]
+        #[arg(long, default_value = DEFAULT_CONFIG)]
         output: PathBuf,
     },
 }
@@ -61,42 +58,10 @@ fn main() -> Result<(), DynError> {
             waybg_ui::run_gui(options);
             Ok(())
         }
-        Commands::InitConfig { output } => write_example_config(&output),
+        Commands::InitConfig { output } => {
+            write_example_config(&output)?;
+            println!("Wrote example config to '{}'.", output.display());
+            Ok(())
+        }
     }
-}
-
-fn write_example_config(output: &Path) -> Result<(), DynError> {
-    const TEMPLATE: &str = r#"[settings]
-check_interval_seconds = 15
-default_profile = "day"
-# override_file = "profiles.override"
-
-[[profiles]]
-name = "day"
-video = "/absolute/path/to/day.mp4"
-[profiles.schedule]
-start = "08:00"
-end = "18:00"
-weekdays = [1, 2, 3, 4, 5]
-
-[[profiles]]
-name = "night"
-video = "/absolute/path/to/night.mp4"
-[profiles.schedule]
-start = "18:00"
-end = "08:00"
-
-[[profiles]]
-name = "fallback"
-video = "/absolute/path/to/fallback.mp4"
-"#;
-
-    if let Some(parent) = output.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(output, TEMPLATE)?;
-    println!("Wrote example config to '{}'.", output.display());
-    Ok(())
 }

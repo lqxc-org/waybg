@@ -8,8 +8,8 @@ use std::{
 use tempfile::TempDir;
 use waybg_core::{
     AutoController, OverrideStore, PlaybackLauncher, PlaybackProcess, Profile, ProfilesConfig,
-    ScheduleWindow, Settings, TimeProvider, read_manual_override, resolve_override_path,
-    write_manual_override,
+    ScheduleWindow, Settings, TimeProvider, ensure_config_exists, read_manual_override,
+    resolve_override_path, write_manual_override,
 };
 
 #[test]
@@ -72,6 +72,39 @@ fn schedule_window_supports_overnight_range() {
     assert!(schedule.is_active(night));
     assert!(schedule.is_active(morning));
     assert!(!schedule.is_active(noon));
+}
+
+#[test]
+fn profile_video_defaults_to_blank_when_field_is_omitted() -> Result<(), Box<dyn std::error::Error>>
+{
+    let raw = r#"
+[[profiles]]
+name = "fallback"
+"#;
+    let config: ProfilesConfig = toml::from_str(raw)?;
+    assert_eq!(config.profiles.len(), 1);
+    assert_eq!(config.profiles[0].video, "blank://");
+    Ok(())
+}
+
+#[test]
+fn ensure_config_exists_writes_blank_default_template() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = TempDir::new()?;
+    let path = temp.path().join("profiles.toml");
+
+    assert!(ensure_config_exists(&path)?);
+    assert!(!ensure_config_exists(&path)?);
+
+    let config = ProfilesConfig::load(&path)?;
+    assert_eq!(config.settings.default_profile.as_deref(), Some("blank"));
+    let blank = config
+        .profiles
+        .iter()
+        .find(|profile| profile.name == "blank")
+        .ok_or_else(|| io::Error::other("blank profile not found in generated template"))?;
+    assert_eq!(blank.video, "blank://");
+
+    Ok(())
 }
 
 #[derive(Clone)]

@@ -33,8 +33,12 @@ sudo pacman -S --needed \
   gst-plugins-base \
   gst-plugins-good \
   gst-plugins-bad \
-  gst-libav
+  gst-plugins-ugly \
+  gst-libav \
+  ffmpeg
 ```
+
+`gst-libav` lets `playbin` use local FFmpeg decoders, including common codecs and AV1 (`avdec_av1` when available).
 
 ## Quick Start
 
@@ -43,6 +47,8 @@ sudo pacman -S --needed \
 ```bash
 cargo run -p waybg-cli -- init-config --output profiles.toml
 ```
+
+If you skip this step, `waybg auto` and `waybg gui` will auto-generate `profiles.toml` when missing.
 
 2) Edit `profiles.toml` with real video file paths.
 
@@ -83,7 +89,7 @@ cargo run -p waybg-ui -- run --config profiles.toml
 ```toml
 [settings]
 check_interval_seconds = 15
-default_profile = "day"
+default_profile = "blank"
 # override_file = "profiles.override"
 
 [[profiles]]
@@ -100,9 +106,15 @@ video = "/absolute/path/to/night.mp4"
 [profiles.schedule]
 start = "18:00"
 end = "08:00"
+
+[[profiles]]
+name = "blank"
+# video is optional; missing video defaults to blank:// (solid black)
 ```
 
 `weekdays` uses ISO numbering: `1=Mon ... 7=Sun`.
+
+`video` accepts `blank://`, `blank`, or `none` for a solid black background.
 
 ## Download Binary from GitHub Actions Artifact
 
@@ -170,3 +182,11 @@ cargo xtask normal-tests
 cargo xtask niri-tests
 cargo xtask ci
 ```
+
+## Release Flow
+
+- On every push/merge to `main`, CI builds one Arch Linux ELF artifact:
+  `waybg-<version>-archlinux-x86_64-elf`.
+- The ELF is set executable with `chmod u+x`.
+- A rolling prerelease named/tagged `test-main` is updated on every `main` merge.
+- A versioned GitHub Release (`v<version>`) is published only when `crates/waybg-cli/Cargo.toml` `version` changes on `main`.

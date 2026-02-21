@@ -7,7 +7,7 @@ use std::{
 };
 use waybg_core::{
     AutoController, DynError, FsOverrideStore, PlaybackLauncher, PlaybackProcess, ProfilesConfig,
-    SystemTimeProvider, resolve_override_path,
+    SystemTimeProvider, ensure_config_exists, resolve_override_path,
 };
 
 #[derive(Debug, Clone)]
@@ -66,6 +66,13 @@ pub fn run_auto_controller(
     player_executable: PathBuf,
     player_prefix_args: Vec<String>,
 ) -> Result<(), DynError> {
+    if ensure_config_exists(config_path)? {
+        println!(
+            "Config '{}' did not exist; generated an example config with blank fallback profile.",
+            config_path.display()
+        );
+    }
+
     let config = ProfilesConfig::load(config_path)?;
     if config.profiles.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "config has no profiles").into());

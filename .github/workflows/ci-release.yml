@@ -36,7 +36,9 @@ jobs:
             gst-plugins-base \
             gst-plugins-good \
             gst-plugins-bad \
-            gst-libav
+            gst-plugins-ugly \
+            gst-libav \
+            ffmpeg
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -76,7 +78,9 @@ jobs:
             gst-plugins-base \
             gst-plugins-good \
             gst-plugins-bad \
-            gst-libav
+            gst-plugins-ugly \
+            gst-libav \
+            ffmpeg
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -111,7 +115,7 @@ jobs:
           mkdir -p dist
           artifact_name="waybg-${{ steps.version.outputs.crate_version }}-archlinux-x86_64-elf"
           cp target/release/waybg "dist/${artifact_name}"
-          chmod +x "dist/${artifact_name}"
+          chmod u+x "dist/${artifact_name}"
           sha256sum "dist/${artifact_name}" > dist/SHA256SUMS.txt
 
       - name: Upload build artifact
@@ -176,6 +180,12 @@ jobs:
           name: waybg-archlinux-x86_64-${{ github.sha }}
           path: dist
 
+      - name: Ensure Linux ELF is executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod u+x dist/*-archlinux-x86_64-elf
+
       - name: Create or update release
         uses: softprops/action-gh-release@v2
         with:
@@ -186,3 +196,50 @@ jobs:
             dist/SHA256SUMS.txt
           generate_release_notes: true
           overwrite_files: true
+
+  test_release:
+    name: Publish rolling test release
+    runs-on: ubuntu-latest
+    needs: package
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: waybg-archlinux-x86_64-${{ github.sha }}
+          path: dist
+
+      - name: Ensure Linux ELF is executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod u+x dist/*-archlinux-x86_64-elf
+
+      - name: Move rolling test tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag -f test-main "${GITHUB_SHA}"
+          git push --force origin refs/tags/test-main
+
+      - name: Create or update rolling test release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-main
+          name: test-main
+          prerelease: true
+          generate_release_notes: false
+          overwrite_files: true
+          body: |
+            Rolling prerelease built from `main`.
+            Commit: `${{ github.sha }}`
+          files: |
+            dist/*-archlinux-x86_64-elf
+            dist/SHA256SUMS.txt
