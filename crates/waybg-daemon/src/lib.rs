@@ -17,11 +17,23 @@ struct PlayerCommand {
 }
 
 impl PlayerCommand {
-    fn spawn_play_process(&self, input: &str, loop_playback: bool) -> Result<Child, io::Error> {
+    fn spawn_play_process(
+        &self,
+        input: &str,
+        loop_playback: bool,
+        output: Option<&str>,
+        mute: bool,
+    ) -> Result<Child, io::Error> {
         let mut command = Command::new(&self.executable);
         command.args(&self.prefix_args).arg(input);
         if loop_playback {
             command.arg("--loop-playback");
+        }
+        if let Some(output) = output {
+            command.args(["--output", output]);
+        }
+        if mute {
+            command.arg("--mute");
         }
 
         command
@@ -55,8 +67,12 @@ impl PlaybackLauncher for CommandPlaybackLauncher {
         &self,
         input: &str,
         loop_playback: bool,
+        output: Option<&str>,
+        mute: bool,
     ) -> Result<Self::Process, io::Error> {
-        let child = self.player.spawn_play_process(input, loop_playback)?;
+        let child = self
+            .player
+            .spawn_play_process(input, loop_playback, output, mute)?;
         Ok(ChildPlayProcess { child })
     }
 }
@@ -68,26 +84,12 @@ pub fn run_auto_controller(
 ) -> Result<(), DynError> {
     if ensure_config_exists(config_path)? {
         println!(
-            "Config '{}' did not exist; generated an example config with blank fallback profile.",
+            "Config '{}' did not exist; generated an example config with blank profile.",
             config_path.display()
         );
     }
 
-    let config = ProfilesConfig::load(config_path)?;
-    if config.profiles.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "config has no profiles").into());
-    }
-
-    let interval_seconds = config.settings.check_interval_seconds.max(1);
-    let interval = Duration::from_secs(interval_seconds);
-    let override_path = resolve_override_path(config_path, &config);
-
-    println!(
-        "Auto mode started with config '{}', override file '{}', interval={}s",
-        config_path.display(),
-        override_path.display(),
-        interval_seconds
-    );
+    let mut first_tick = true;
 
     let launcher = CommandPlaybackLauncher {
         player: PlayerCommand {
@@ -100,6 +102,26 @@ pub fn run_auto_controller(
     let mut controller = AutoController::new(launcher, store, clock);
 
     loop {
+        let config = ProfilesConfig::load(config_path)?;
+        if config.profiles.is_empty() {
+            return Err(
+                io::Error::new(io::ErrorKind::InvalidInput, "config has no profiles").into(),
+            );
+        }
+        let interval_seconds = config.settings.check_interval_seconds.max(1);
+        let interval = Duration::from_secs(interval_seconds);
+        let override_path = resolve_override_path(config_path, &config)?;
+
+        if first_tick {
+            println!(
+                "Auto mode started with config '{}', override file '{}', interval={}s",
+                config_path.display(),
+                override_path.display(),
+                interval_seconds
+            );
+            first_tick = false;
+        }
+
         let tick = controller.tick(&config, &override_path)?;
         if tick.changed {
             println!(

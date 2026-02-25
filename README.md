@@ -7,7 +7,7 @@ Wayland/Niri video wallpaper monorepo.
 - `crates/waybg-cli`: user-facing `waybg` command (`play`, `auto`, `gui`, `init-config`).
 - `crates/waybg-ui`: Freya profile controller UI crate/binary.
 - `crates/waybg-daemon`: schedule/override daemon crate/binary.
-- `crates/wayland-core`: Wayland playback core (GStreamer decode + `waylandsink`).
+- `crates/wayland-core`: Wayland playback core (layer-shell background rendering, GStreamer decode, metrics export).
 - `crates/waybg-core`: shared profile/config/override scheduling logic.
 - `xtask`: CI/dev task runner (`cargo ci`, `cargo normal-tests`, `cargo niri-tests`).
 
@@ -15,8 +15,25 @@ Wayland/Niri video wallpaper monorepo.
 
 - `play`: direct playback on Wayland.
 - `auto`: automatic profile-based wallpaper switching (time schedules + manual override).
+- `multi-monitor`: optional per-output videos (`[[profiles.outputs]]`) with one playback process per output.
+- `audio`: mute/unmute control from CLI (`--mute`/`--unmute`) and UI toggle (stored in config).
 - `gui`: Freya desktop UI to preview profiles and set/clear manual override.
-- `init-config`: generate a starter `profiles.toml`.
+- `performance`: optional FPS metrics JSON output (`--metrics-file`) and UI FPS chart (Avg/low95/low99).
+- `init-config`: generate a starter config at the XDG default path.
+- `niri backend`: on Niri sessions, playback defaults to a built-in layer-shell renderer (background layer, not a normal app window).
+- `hardware decode preference`: known hardware decoders are promoted in GStreamer rank when available.
+
+## Default Paths (XDG)
+
+- Config: `$XDG_CONFIG_HOME/waybg/profiles.toml`
+- Manual override state: `$XDG_STATE_HOME/waybg/profiles.override`
+
+All `waybg` binaries use those defaults when `--config` is omitted.
+If `XDG_CONFIG_HOME` is unset/empty, waybg uses `$HOME/.config`.
+If `XDG_STATE_HOME` is unset/empty, waybg uses `$HOME/.local/state`.
+When set, `XDG_CONFIG_HOME` and `XDG_STATE_HOME` must be absolute paths.
+
+On UI startup, if config is missing it is auto-created from the example template, then the active profile from config (schedule + manual override + mute) is applied immediately. If startup validation/apply fails, the app exits with a non-zero status and shows a desktop notification.
 
 ## System Dependencies
 
@@ -39,29 +56,35 @@ sudo pacman -S --needed \
 ```
 
 `gst-libav` lets `playbin` use local FFmpeg decoders, including common codecs and AV1 (`avdec_av1` when available).
+On Niri, waybg defaults to its internal layer-shell backend so wallpaper playback does not appear as a normal window.
+Use `WAYBG_BACKEND=gstreamer` to force the legacy GStreamer window backend, or `WAYBG_BACKEND=layer-shell` to force layer-shell.
+Use `WAYBG_SCALE_MODE=fill|fit|stretch` to control layer-shell scaling quality/behavior (`fill` is default, aspect-preserving crop).
+Use `WAYBG_DMABUF=auto|on|off` to control dmabuf import (`auto` default; `on` fails fast if compositor/dma_heap support is missing).
+When decoder/appsink negotiate `video/x-raw(memory:DMABuf),format=DMA_DRM` (preferred) or `video/x-raw(memory:DMABuf),format=BGRA`, waybg imports decoder dmabuf frames directly into layer-shell buffers (including multi-plane layouts) with automatic fallback when unsupported.
+waybg also promotes available hardware decoder plugins (`va*`, `v4l2*`, `nv*`, etc.) to prefer GPU/accelerated decode paths.
 
 ## Quick Start
 
 1) Generate sample config:
 
 ```bash
-cargo run -p waybg-cli -- init-config --output profiles.toml
+cargo run -p waybg-cli -- init-config
 ```
 
-If you skip this step, `waybg auto` and `waybg gui` will auto-generate `profiles.toml` when missing.
+If you skip this step, `waybg auto` and `waybg gui` will auto-generate the XDG config file when missing.
 
-2) Edit `profiles.toml` with real video file paths.
+2) Edit `$XDG_CONFIG_HOME/waybg/profiles.toml` with real video file paths.
 
 3) Start automatic switching:
 
 ```bash
-cargo run -p waybg-cli -- auto --config profiles.toml
+cargo run -p waybg-cli -- auto
 ```
 
 4) Open Freya profile controller (optional, in another terminal):
 
 ```bash
-cargo run -p waybg-cli -- gui --config profiles.toml
+cargo run -p waybg-cli -- gui
 ```
 
 5) Direct one-off playback:
@@ -70,18 +93,44 @@ cargo run -p waybg-cli -- gui --config profiles.toml
 cargo run -p waybg-cli -- play /path/to/video.mp4 --loop-playback
 ```
 
+Target a specific monitor/output:
+
+```bash
+cargo run -p waybg-cli -- play /path/to/video.mp4 --loop-playback --output HDMI-A-1
+```
+
+Play muted (or explicitly unmute):
+
+```bash
+cargo run -p waybg-cli -- play /path/to/video.mp4 --loop-playback --mute
+cargo run -p waybg-cli -- play /path/to/video.mp4 --loop-playback --unmute
+```
+
+Export FPS metrics JSON for UI/monitoring:
+
+```bash
+cargo run -p waybg-cli -- play /path/to/video.mp4 --loop-playback --metrics-file /tmp/waybg-fps.json
+```
+
+`--metrics-file` writes avg/low95/low99 and recent FPS samples as JSON.
+
+In UI, metrics have both manual and live modes:
+- `Enable/Disable Capture`: manual control for whether playback writes metrics files.
+- `Trigger Snapshot`: manual pull/reload of the latest metrics.
+- `Pause Live` / `Resume Live`: real-time polling mode (default 250ms refresh cadence).
+
 ## Optional Standalone Binaries
 
 Run daemon directly:
 
 ```bash
-cargo run -p waybg-daemon -- run --config profiles.toml
+cargo run -p waybg-daemon -- run
 ```
 
 Run UI directly:
 
 ```bash
-cargo run -p waybg-ui -- run --config profiles.toml
+cargo run -p waybg-ui -- run
 ```
 
 ## Config Format
@@ -90,7 +139,8 @@ cargo run -p waybg-ui -- run --config profiles.toml
 [settings]
 check_interval_seconds = 15
 default_profile = "blank"
-# override_file = "profiles.override"
+# override_file = "/absolute/path/to/custom.override"
+# mute = false
 
 [[profiles]]
 name = "day"
@@ -99,6 +149,17 @@ video = "/absolute/path/to/day.mp4"
 start = "08:00"
 end = "18:00"
 weekdays = [1, 2, 3, 4, 5]
+
+# Optional per-output mapping for multi-monitor. When outputs are present,
+# waybg targets only these outputs for this profile.
+[[profiles]]
+name = "day-multi"
+[[profiles.outputs]]
+output = "eDP-1"
+video = "/absolute/path/to/laptop-day.mp4"
+[[profiles.outputs]]
+output = "HDMI-A-1"
+video = "/absolute/path/to/external-day.mp4"
 
 [[profiles]]
 name = "night"
@@ -115,6 +176,13 @@ name = "blank"
 `weekdays` uses ISO numbering: `1=Mon ... 7=Sun`.
 
 `video` accepts `blank://`, `blank`, or `none` for a solid black background.
+
+Per-output playback uses the `output` name from your compositor (for Niri, names like `eDP-1`, `HDMI-A-1`, etc.). The CLI `play` command also accepts `--output <name>` for one-off targeting.
+Use `settings.mute = true` to mute playback in auto mode. The UI mute/unmute button updates this value in the config file.
+UI playback writes per-target metrics files under the override directory parent (`.../waybg/metrics/*.json`); `Trigger Snapshot` redraws manually and live mode refreshes automatically.
+
+When `settings.override_file` is not set, waybg writes manual override state to
+`$XDG_STATE_HOME/waybg/profiles.override`.
 
 ## Download Binary from GitHub Actions Artifact
 
