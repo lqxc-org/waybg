@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[pre-commit] cargo fmt --all -- --check"
-cargo fmt --all -- --check
+echo "[pre-commit] zig build fmt-check"
+zig build fmt-check
 
-echo "[pre-commit] cargo clippy --workspace --all-targets --all-features -- -D warnings"
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+echo "[pre-commit] zig build ci"
+zig build ci

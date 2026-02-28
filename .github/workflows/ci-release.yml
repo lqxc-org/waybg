@@ -13,115 +13,100 @@ permissions:
   contents: read
 
 env:
-  CARGO_TERM_COLOR: always
+  ZIG_VERSION: 0.15.2
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ci:
-    name: fmt + lint + tests
+    name: fmt + build + tests
     runs-on: ubuntu-latest
-    container:
-      image: archlinux:latest
     steps:
-      - name: Install Arch dependencies
-        run: |
-          pacman -Syu --noconfirm \
-            git \
-            gcc \
-            pkgconf \
-            fontconfig \
-            freetype2 \
-            wayland \
-            libxkbcommon \
-            gstreamer \
-            gst-plugins-base \
-            gst-plugins-good \
-            gst-plugins-bad \
-            gst-plugins-ugly \
-            gst-libav \
-            ffmpeg
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
         with:
-          components: rustfmt, clippy
+          version: ${{ env.ZIG_VERSION }}
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxfixes-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxrender-dev \
+            libxrandr-dev
 
-      - name: Run CI suite (xtask)
-        run: cargo ci
+      - name: Run CI checks
+        run: zig build ci
 
   package:
     name: Build artifact
     runs-on: ubuntu-latest
-    container:
-      image: archlinux:latest
     needs: ci
     outputs:
-      crate_version: ${{ steps.version.outputs.crate_version }}
+      package_version: ${{ steps.version.outputs.package_version }}
       release_tag: ${{ steps.version.outputs.release_tag }}
     steps:
-      - name: Install Arch dependencies
-        run: |
-          pacman -Syu --noconfirm \
-            git \
-            gcc \
-            pkgconf \
-            fontconfig \
-            freetype2 \
-            wayland \
-            libxkbcommon \
-            gstreamer \
-            gst-plugins-base \
-            gst-plugins-good \
-            gst-plugins-bad \
-            gst-plugins-ugly \
-            gst-libav \
-            ffmpeg
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxfixes-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxrender-dev \
+            libxrandr-dev
 
-      - name: Read crate version
+      - name: Read package version
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          manifest_path="crates/waybg-cli/Cargo.toml"
-          crate_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' "${manifest_path}" | head -n1)"
-          if [[ -z "${crate_version}" ]]; then
-            echo "Failed to parse version from ${manifest_path}" >&2
+          package_version="$(sed -nE 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' build.zig.zon | head -n1)"
+          if [[ -z "${package_version}" ]]; then
+            echo "Failed to parse version from build.zig.zon" >&2
             exit 1
           fi
-          echo "crate_version=${crate_version}" >> "${GITHUB_OUTPUT}"
-          echo "release_tag=v${crate_version}" >> "${GITHUB_OUTPUT}"
+          echo "package_version=${package_version}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=v${package_version}" >> "${GITHUB_OUTPUT}"
 
-      - name: Build release binary
-        run: cargo build --release --locked -p waybg-cli --bin waybg
-
-      - name: Create Linux ELF artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          artifact_name="waybg-${{ steps.version.outputs.crate_version }}-archlinux-x86_64-elf"
-          cp target/release/waybg "dist/${artifact_name}"
-          chmod u+x "dist/${artifact_name}"
-          sha256sum "dist/${artifact_name}" > dist/SHA256SUMS.txt
+      - name: Build release artifact
+        run: zig build package -Doptimize=ReleaseSafe --prefix dist -Drelease-version=${{ steps.version.outputs.package_version }}
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: waybg-archlinux-x86_64-${{ github.sha }}
+          name: waystream-linux-x86_64-${{ github.sha }}
           path: dist/*
           if-no-files-found: error
 
@@ -140,21 +125,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect Cargo.toml version change
+      - name: Detect build.zig.zon version change
         id: detect
         shell: bash
         run: |
           set -euo pipefail
 
-          manifest_path="crates/waybg-cli/Cargo.toml"
-          current_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' "${manifest_path}" | head -n1)"
+          manifest_path="build.zig.zon"
+          current_version="$(sed -nE 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "${manifest_path}" | head -n1)"
           previous_version=""
           changed="false"
 
           before_sha="${{ github.event.before }}"
           if [[ "${before_sha}" != "0000000000000000000000000000000000000000" ]]; then
             if git cat-file -e "${before_sha}:${manifest_path}" 2>/dev/null; then
-              previous_version="$(git show "${before_sha}:${manifest_path}" | sed -nE 's/^version = "([^"]+)"/\1/p' | head -n1)"
+              previous_version="$(git show "${before_sha}:${manifest_path}" | sed -nE 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' | head -n1)"
             fi
           fi
 
@@ -177,14 +162,14 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
-          name: waybg-archlinux-x86_64-${{ github.sha }}
+          name: waystream-linux-x86_64-${{ github.sha }}
           path: dist
 
       - name: Ensure Linux ELF is executable
         shell: bash
         run: |
           set -euo pipefail
-          chmod u+x dist/*-archlinux-x86_64-elf
+          chmod u+x dist/*-linux-x86_64-elf
 
       - name: Create or update release
         uses: softprops/action-gh-release@v2
@@ -192,7 +177,7 @@ jobs:
           tag_name: ${{ needs.package.outputs.release_tag }}
           name: ${{ needs.package.outputs.release_tag }}
           files: |
-            dist/*-archlinux-x86_64-elf
+            dist/*-linux-x86_64-elf
             dist/SHA256SUMS.txt
           generate_release_notes: true
           overwrite_files: true
@@ -213,14 +198,14 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
-          name: waybg-archlinux-x86_64-${{ github.sha }}
+          name: waystream-linux-x86_64-${{ github.sha }}
           path: dist
 
       - name: Ensure Linux ELF is executable
         shell: bash
         run: |
           set -euo pipefail
-          chmod u+x dist/*-archlinux-x86_64-elf
+          chmod u+x dist/*-linux-x86_64-elf
 
       - name: Move rolling test tag
         shell: bash
@@ -241,5 +226,5 @@ jobs:
             Rolling prerelease built from `main`.
             Commit: `${{ github.sha }}`
           files: |
-            dist/*-archlinux-x86_64-elf
+            dist/*-linux-x86_64-elf
             dist/SHA256SUMS.txt

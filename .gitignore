@@ -1,1 +1,4 @@
-/target
+/.zig-cache
+/.zig-global-cache
+/zig-out
+/dist*/

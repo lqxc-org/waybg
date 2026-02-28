@@ -1,13 +1,13 @@
 repos:
   - repo: local
     hooks:
-      - id: cargo-fmt
-        name: cargo fmt (check)
+      - id: zig-fmt-check
+        name: zig fmt (check)
         language: system
-        entry: cargo fmt --all -- --check
+        entry: zig build fmt-check
         pass_filenames: false
-      - id: cargo-clippy
-        name: cargo clippy (deny warnings)
+      - id: zig-ci
+        name: zig ci
         language: system
-        entry: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        entry: zig build ci
         pass_filenames: false
