@@ -6,6 +6,7 @@
 
 - Zig `0.15.2`
 - `just` (optional, but recommended)
+- `curl`, `tar`, `meson`, `ninja` (for native `libmpv` build)
 
 ## Developer Commands
 
@@ -30,6 +31,30 @@ You can run the same targets directly with `zig build`:
 - `zig build package -Doptimize=ReleaseSafe --prefix dist -Drelease-version=0.1.0`
 
 By default, `package` uses `.version` from `build.zig.zon` for artifact naming. Use `-Drelease-version` to override.
+
+## Native Static Build (`libmpv` + `mimalloc`)
+
+`x86_64-linux-musl` builds can statically link:
+
+- `libmpv` (from upstream tarball via Meson)
+- `mimalloc` (from upstream tarball, compiled with `zig cc`)
+
+Useful options:
+
+- `-Dnative-deps=true`: enable native dependency build (defaults to true on `x86_64-linux-musl`)
+- `-Dasan=true`: enable AddressSanitizer flags for native dependency builds
+- `-Dlto=false`: disable executable LTO
+- `-Dlibmpv-version=0.39.0`: set mpv version (URL defaults from this)
+- `-Dlibmpv-tarball-url=...`: override mpv tarball URL
+- `-Dlibmpv-extra-meson-args="..."`: pass extra Meson args to mpv setup
+- `-Dmimalloc-version=v3.2.8`: set mimalloc tag
+- `-Dmimalloc-tarball-url=...`: override mimalloc tarball URL
+
+Example:
+
+```sh
+zig build -Dtarget=x86_64-linux-musl -Dnative-deps=true -Doptimize=ReleaseFast
+```
 
 ## CI and Release
 

@@ -6,6 +6,9 @@ pub const Context = struct {
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     raylib: *std.Build.Module,
+    has_native_deps: bool,
+    libmpv_version: []const u8,
+    mimalloc_version: []const u8,
 };
 
 pub fn createRootModule(ctx: Context) *std.Build.Module {
@@ -14,7 +17,13 @@ pub fn createRootModule(ctx: Context) *std.Build.Module {
         .target = ctx.target,
         .optimize = ctx.optimize,
     });
+    const build_options = ctx.b.addOptions();
+    build_options.addOption(bool, "has_native_deps", ctx.has_native_deps);
+    build_options.addOption([]const u8, "libmpv_version", ctx.libmpv_version);
+    build_options.addOption([]const u8, "mimalloc_version", ctx.mimalloc_version);
+
     root_module.addImport("raylib", ctx.raylib);
+    root_module.addOptions("build_options", build_options);
     return root_module;
 }
 
@@ -31,6 +40,9 @@ pub fn addUnitTests(ctx: Context) *std.Build.Step.Run {
         .target = ctx.b.graph.host,
         .optimize = ctx.optimize,
         .raylib = ctx.raylib,
+        .has_native_deps = false,
+        .libmpv_version = "disabled",
+        .mimalloc_version = "disabled",
     });
 
     const unit_tests = ctx.b.addTest(.{
