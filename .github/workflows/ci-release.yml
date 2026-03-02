@@ -43,6 +43,7 @@ jobs:
             pkg-config \
             libasound2-dev \
             libgl1-mesa-dev \
+            libmpv-dev \
             libwayland-dev \
             libx11-dev \
             libxcursor-dev \
@@ -84,6 +85,7 @@ jobs:
             pkg-config \
             libasound2-dev \
             libgl1-mesa-dev \
+            libmpv-dev \
             libwayland-dev \
             libx11-dev \
             libxcursor-dev \
