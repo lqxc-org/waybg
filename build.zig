@@ -1,5 +1,4 @@
 const std = @import("std");
-const rlz = @import("raylib_zig");
 const config = @import("build/config.zig");
 const app_build = @import("build/app.zig");
 const build_steps = @import("build/steps.zig");
@@ -9,12 +8,23 @@ const native_deps = @import("build/native_deps.zig");
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const target_is_musl_native = target.result.os.tag == .linux and target.result.abi == .musl and target.result.cpu.arch == .x86_64;
+    const target_is_linux = target.result.os.tag == .linux;
+    const target_is_musl_native = target_is_linux and target.result.abi == .musl and target.result.cpu.arch == .x86_64;
     const native_deps_enabled = b.option(
         bool,
         "native-deps",
         "Enable libmpv/mimalloc native dependency build (supported on x86_64-linux-musl)",
     ) orelse target_is_musl_native;
+    const system_mpv_enabled = b.option(
+        bool,
+        "system-mpv",
+        "Link system libmpv dynamically (default on non-musl Linux)",
+    ) orelse (target_is_linux and !native_deps_enabled);
+    if (native_deps_enabled and system_mpv_enabled) {
+        std.log.err("choose only one: -Dnative-deps=true or -Dsystem-mpv=true", .{});
+        return error.InvalidOption;
+    }
+
     const default_release_version = metadata.readPackageVersion(b.allocator, b.pathFromRoot("build.zig.zon")) catch "dev";
     const release_version = b.option(
         []const u8,
@@ -51,22 +61,19 @@ pub fn build(b: *std.Build) !void {
         "https://github.com/microsoft/mimalloc/archive/refs/tags/{s}.tar.gz",
         .{mimalloc_version},
     );
-
-    const raylib_dep = b.dependency("raylib_zig", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const raylib = raylib_dep.module("raylib");
-    const raylib_artifact = raylib_dep.artifact("raylib");
+    const has_mpv = native_deps_enabled or system_mpv_enabled;
+    const has_mimalloc = native_deps_enabled;
+    const effective_libmpv_version = if (native_deps_enabled) libmpv_version else if (system_mpv_enabled) "system" else "disabled";
+    const effective_mimalloc_version = if (native_deps_enabled) mimalloc_version else "disabled";
 
     const app_ctx: app_build.Context = .{
         .b = b,
         .target = target,
         .optimize = optimize,
-        .raylib = raylib,
-        .has_native_deps = false,
-        .libmpv_version = libmpv_version,
-        .mimalloc_version = mimalloc_version,
+        .has_mpv = false,
+        .has_mimalloc = false,
+        .libmpv_version = "disabled",
+        .mimalloc_version = "disabled",
     };
 
     const run_step = b.step("run", "Run the app");
@@ -77,107 +84,161 @@ pub fn build(b: *std.Build) !void {
     const fmt_steps = build_steps.addFmtSteps(b);
     _ = build_steps.addCiStep(b, fmt_steps.fmt_check, b.getInstallStep(), test_step);
 
-    // web exports are completely separate
     if (target.query.os_tag == .emscripten) {
-        const root_module = app_build.createRootModule(.{
-            .b = b,
+        std.log.err("emscripten/web target is no longer supported", .{});
+        return error.UnsupportedTarget;
+    }
+
+    const native_app_ctx: app_build.Context = .{
+        .b = b,
+        .target = target,
+        .optimize = optimize,
+        .has_mpv = has_mpv,
+        .has_mimalloc = has_mimalloc,
+        .libmpv_version = effective_libmpv_version,
+        .mimalloc_version = effective_mimalloc_version,
+    };
+    const root_module = app_build.createRootModule(native_app_ctx);
+    const exe = app_build.createNativeExecutable(native_app_ctx, root_module);
+    configureExecutable(exe, has_mpv, enable_lto);
+
+    if (native_deps_enabled) {
+        if (!target_is_musl_native) {
+            std.log.err(
+                "native deps require -Dtarget=x86_64-linux-musl (or disable with -Dnative-deps=false)",
+                .{},
+            );
+            return error.UnsupportedTarget;
+        }
+
+        const deps_options: native_deps.Options = .{
             .target = target,
             .optimize = optimize,
-            .raylib = raylib,
-            .has_native_deps = false,
-            .libmpv_version = "disabled",
-            .mimalloc_version = "disabled",
-        });
-
-        const emsdk = rlz.emsdk;
-        const wasm = b.addLibrary(.{
-            .name = config.app_name,
-            .root_module = root_module,
-        });
-
-        const install_dir: std.Build.InstallDir = .{ .custom = "web" };
-        const emcc_flags = emsdk.emccDefaultFlags(b.allocator, .{ .optimize = optimize });
-        const emcc_settings = emsdk.emccDefaultSettings(b.allocator, .{ .optimize = optimize });
-
-        const emcc_step = emsdk.emccStep(b, raylib_artifact, wasm, .{
-            .optimize = optimize,
-            .flags = emcc_flags,
-            .settings = emcc_settings,
-            .shell_file_path = emsdk.shell(raylib_dep.builder),
-            .install_dir = install_dir,
-            .embed_paths = &.{.{ .src_path = "resources/" }},
-        });
-        b.getInstallStep().dependOn(emcc_step);
-
-        const html_filename = try std.fmt.allocPrint(b.allocator, "{s}.html", .{wasm.name});
-        const emrun_step = emsdk.emrunStep(
-            b,
-            b.getInstallPath(install_dir, html_filename),
-            &.{},
-        );
-
-        emrun_step.dependOn(emcc_step);
-        run_step.dependOn(emrun_step);
-    } else {
-        const native_app_ctx: app_build.Context = .{
-            .b = b,
-            .target = target,
-            .optimize = optimize,
-            .raylib = raylib,
-            .has_native_deps = native_deps_enabled,
-            .libmpv_version = libmpv_version,
+            .asan = asan,
+            .mpv_version = libmpv_version,
+            .mpv_tarball_url = libmpv_tarball_url,
+            .mpv_extra_meson_args = libmpv_extra_meson_args,
             .mimalloc_version = mimalloc_version,
+            .mimalloc_tarball_url = mimalloc_tarball_url,
         };
-        const root_module = app_build.createRootModule(native_app_ctx);
-        const exe = app_build.createNativeExecutable(native_app_ctx, root_module);
-        exe.root_module.linkSystemLibrary("EGL", .{
+        try linkBundledDeps(b, exe, deps_options);
+    } else if (system_mpv_enabled) {
+        exe.root_module.linkSystemLibrary("mpv", .{
             .preferred_link_mode = .dynamic,
         });
-        exe.root_module.linkSystemLibrary("wayland-egl", .{
-            .preferred_link_mode = .dynamic,
+    }
+
+    b.installArtifact(exe);
+
+    const run_cmd = b.addRunArtifact(exe);
+    run_cmd.step.dependOn(b.getInstallStep());
+    _ = build_steps.addPackageStep(b, exe, release_version);
+    run_step.dependOn(&run_cmd.step);
+
+    try addMuslReleaseStep(b, .{
+        .release_version = release_version,
+        .libmpv_version = libmpv_version,
+        .libmpv_tarball_url = libmpv_tarball_url,
+        .libmpv_extra_meson_args = libmpv_extra_meson_args,
+        .mimalloc_version = mimalloc_version,
+        .mimalloc_tarball_url = mimalloc_tarball_url,
+        .asan = asan,
+    });
+}
+
+const MuslReleaseOptions = struct {
+    release_version: []const u8,
+    libmpv_version: []const u8,
+    libmpv_tarball_url: []const u8,
+    libmpv_extra_meson_args: []const u8,
+    mimalloc_version: []const u8,
+    mimalloc_tarball_url: []const u8,
+    asan: bool,
+};
+
+fn addMuslReleaseStep(b: *std.Build, options: MuslReleaseOptions) !void {
+    const musl_release_step = b.step(
+        "musl-release",
+        "Build x86_64-linux-musl ReleaseSafe binary with bundled libmpv/mimalloc",
+    );
+    const musl_target = b.resolveTargetQuery(.{
+        .cpu_arch = .x86_64,
+        .os_tag = .linux,
+        .abi = .musl,
+    });
+    const musl_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
+    const app_ctx: app_build.Context = .{
+        .b = b,
+        .target = musl_target,
+        .optimize = musl_optimize,
+        .has_mpv = true,
+        .has_mimalloc = true,
+        .libmpv_version = options.libmpv_version,
+        .mimalloc_version = options.mimalloc_version,
+    };
+
+    const root_module = app_build.createRootModule(app_ctx);
+    const exe = app_build.createNativeExecutable(app_ctx, root_module);
+    configureExecutable(exe, true, true);
+
+    const deps_options: native_deps.Options = .{
+        .target = musl_target,
+        .optimize = musl_optimize,
+        .asan = options.asan,
+        .mpv_version = options.libmpv_version,
+        .mpv_tarball_url = options.libmpv_tarball_url,
+        .mpv_extra_meson_args = options.libmpv_extra_meson_args,
+        .mimalloc_version = options.mimalloc_version,
+        .mimalloc_tarball_url = options.mimalloc_tarball_url,
+    };
+    try linkBundledDeps(b, exe, deps_options);
+
+    const release_asset_name = b.fmt("{s}-{s}-linux-x86_64-musl", .{
+        config.app_name,
+        options.release_version,
+    });
+    const install_release = b.addInstallArtifact(exe, .{
+        .dest_dir = .{ .override = .prefix },
+        .dest_sub_path = release_asset_name,
+    });
+    musl_release_step.dependOn(&install_release.step);
+}
+
+fn configureExecutable(
+    exe: *std.Build.Step.Compile,
+    has_mpv: bool,
+    enable_lto: bool,
+) void {
+    if (has_mpv) {
+        exe.root_module.link_libc = true;
+    }
+    exe.root_module.linkSystemLibrary("EGL", .{
+        .preferred_link_mode = .dynamic,
+    });
+    exe.root_module.linkSystemLibrary("wayland-egl", .{
+        .preferred_link_mode = .dynamic,
+    });
+    exe.root_module.linkSystemLibrary("GLESv2", .{
+        .preferred_link_mode = .dynamic,
+    });
+    if (enable_lto) {
+        exe.want_lto = true;
+    }
+}
+
+fn linkBundledDeps(
+    b: *std.Build,
+    exe: *std.Build.Step.Compile,
+    options: native_deps.Options,
+) !void {
+    exe.linkage = .static;
+    const artifacts = try native_deps.buildNativeDeps(b, options);
+    exe.step.dependOn(artifacts.step);
+    native_deps.linkNativeDeps(b, exe, artifacts);
+    if (options.asan) {
+        exe.root_module.linkSystemLibrary("asan", .{
+            .use_pkg_config = .no,
+            .preferred_link_mode = .static,
         });
-        exe.root_module.linkSystemLibrary("GLESv2", .{
-            .preferred_link_mode = .dynamic,
-        });
-        if (enable_lto) {
-            exe.want_lto = true;
-        }
-
-        if (native_deps_enabled) {
-            if (!target_is_musl_native) {
-                std.log.err(
-                    "native deps require -Dtarget=x86_64-linux-musl (or disable with -Dnative-deps=false)",
-                    .{},
-                );
-                return error.UnsupportedTarget;
-            }
-
-            exe.linkage = .static;
-            const artifacts = try native_deps.buildNativeDeps(b, .{
-                .target = target,
-                .optimize = optimize,
-                .asan = asan,
-                .mpv_version = libmpv_version,
-                .mpv_tarball_url = libmpv_tarball_url,
-                .mpv_extra_meson_args = libmpv_extra_meson_args,
-                .mimalloc_version = mimalloc_version,
-                .mimalloc_tarball_url = mimalloc_tarball_url,
-            });
-            exe.step.dependOn(artifacts.step);
-            native_deps.linkNativeDeps(b, exe, artifacts);
-            if (asan) {
-                exe.root_module.linkSystemLibrary("asan", .{
-                    .use_pkg_config = .no,
-                    .preferred_link_mode = .static,
-                });
-            }
-        }
-
-        b.installArtifact(exe);
-
-        const run_cmd = b.addRunArtifact(exe);
-        run_cmd.step.dependOn(b.getInstallStep());
-        _ = build_steps.addPackageStep(b, exe, release_version);
-        run_step.dependOn(&run_cmd.step);
     }
 }

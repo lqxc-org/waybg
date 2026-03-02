@@ -38,11 +38,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ca-certificates \
             curl \
+            python3-pip \
             meson \
             ninja-build \
             pkg-config \
             libasound2-dev \
             libgl1-mesa-dev \
+            libmpv-dev \
             libwayland-dev \
             libx11-dev \
             libxcursor-dev \
@@ -53,6 +55,11 @@ jobs:
             libxkbcommon-dev \
             libxrender-dev \
             libxrandr-dev
+
+      - name: Install newer Meson for Zig musl cross build
+        run: |
+          python3 -m pip install --user --break-system-packages "meson>=1.10.0"
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Run CI checks
         run: zig build ci
@@ -79,11 +86,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ca-certificates \
             curl \
+            python3-pip \
             meson \
             ninja-build \
             pkg-config \
             libasound2-dev \
             libgl1-mesa-dev \
+            libmpv-dev \
             libwayland-dev \
             libx11-dev \
             libxcursor-dev \
@@ -94,6 +103,11 @@ jobs:
             libxkbcommon-dev \
             libxrender-dev \
             libxrandr-dev
+
+      - name: Install newer Meson for Zig musl cross build
+        run: |
+          python3 -m pip install --user --break-system-packages "meson>=1.10.0"
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Read package version
         id: version
@@ -112,11 +126,23 @@ jobs:
         run: zig build package -Doptimize=ReleaseSafe --prefix dist -Drelease-version=${{ steps.version.outputs.package_version }}
 
       - name: Upload build artifact
+        id: upload_host
         uses: actions/upload-artifact@v4
         with:
           name: waystream-linux-x86_64-${{ github.sha }}
           path: dist/*
           if-no-files-found: error
+
+      - name: Add artifact download links
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Build Artifacts"
+            echo ""
+            echo "- [waystream-linux-x86_64-${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload_host.outputs.artifact-id }})"
+            echo "- [All artifacts for this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts)"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
   version_gate:
     name: Detect version change

@@ -5,8 +5,8 @@ pub const Context = struct {
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    raylib: *std.Build.Module,
-    has_native_deps: bool,
+    has_mpv: bool,
+    has_mimalloc: bool,
     libmpv_version: []const u8,
     mimalloc_version: []const u8,
 };
@@ -18,11 +18,11 @@ pub fn createRootModule(ctx: Context) *std.Build.Module {
         .optimize = ctx.optimize,
     });
     const build_options = ctx.b.addOptions();
-    build_options.addOption(bool, "has_native_deps", ctx.has_native_deps);
+    build_options.addOption(bool, "has_mpv", ctx.has_mpv);
+    build_options.addOption(bool, "has_mimalloc", ctx.has_mimalloc);
     build_options.addOption([]const u8, "libmpv_version", ctx.libmpv_version);
     build_options.addOption([]const u8, "mimalloc_version", ctx.mimalloc_version);
 
-    root_module.addImport("raylib", ctx.raylib);
     root_module.addOptions("build_options", build_options);
     return root_module;
 }
@@ -39,8 +39,8 @@ pub fn addUnitTests(ctx: Context) *std.Build.Step.Run {
         .b = ctx.b,
         .target = ctx.b.graph.host,
         .optimize = ctx.optimize,
-        .raylib = ctx.raylib,
-        .has_native_deps = false,
+        .has_mpv = false,
+        .has_mimalloc = false,
         .libmpv_version = "disabled",
         .mimalloc_version = "disabled",
     });

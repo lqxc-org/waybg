@@ -1,7 +1,15 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const native_c = @import("native_c.zig");
 
 const log = std.log.scoped(.wayland);
+
+pub const RunOptions = struct {
+    video_path: ?[]const u8 = null,
+    output_name: ?[]const u8 = null,
+};
+
+const MaxOutputs = 16;
 
 pub const wl_proxy = opaque {};
 pub const wl_display = opaque {};
@@ -53,6 +61,8 @@ pub const Globals = struct {
     shm: ?Global = null,
     xdg_wm_base: ?Global = null,
     layer_shell: ?Global = null,
+    outputs: [MaxOutputs]Global = [_]Global{.{ .name = 0, .version = 0 }} ** MaxOutputs,
+    output_count: usize = 0,
 };
 
 pub const EglVersion = struct {
@@ -71,6 +81,10 @@ pub const Error = error{
     MissingCompositor,
     BindCompositorFailed,
     BindLayerShellFailed,
+    OutputBindFailed,
+    OutputListenerFailed,
+    OutputNameRoundtripFailed,
+    OutputNotFound,
     SurfaceCreateFailed,
     MissingLayerShell,
     LayerSurfaceCreateFailed,
@@ -181,11 +195,12 @@ pub const Client = struct {
     display: *wl_display,
     compositor: *wl_compositor,
     layer_shell: ?*zwlr_layer_shell_v1 = null,
+    target_output: ?*wl_output = null,
     globals: Globals,
     egl_display: ?*anyopaque = null,
     egl_version: EglVersion = .{ .major = 0, .minor = 0 },
 
-    pub fn connect() !Client {
+    pub fn connect(output_name: ?[]const u8) !Client {
         var runtime = try Runtime.load();
         errdefer runtime.deinit();
 
@@ -232,17 +247,25 @@ pub const Client = struct {
             ) orelse return error.BindLayerShellFailed;
             layer_shell = @ptrCast(layer_shell_proxy);
         }
+        var target_output: ?*wl_output = null;
+        if (output_name) |name| {
+            target_output = try resolveOutputByName(&runtime, display, registry, globals.outputs[0..globals.output_count], name);
+        }
 
         return .{
             .runtime = runtime,
             .display = display,
             .compositor = compositor,
             .layer_shell = layer_shell,
+            .target_output = target_output,
             .globals = globals,
         };
     }
 
     pub fn deinit(self: *Client) void {
+        if (self.target_output) |output| {
+            self.runtime.wayland.proxy_destroy(@ptrCast(output));
+        }
         if (self.layer_shell) |layer_shell| {
             self.runtime.wayland.proxy_destroy(@ptrCast(layer_shell));
         }
@@ -341,7 +364,7 @@ pub const Client = struct {
             0,
             @as(?*anyopaque, null),
             surface.handle,
-            @as(?*wl_output, null),
+            self.target_output,
             ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND,
             namespace,
         ) orelse return error.LayerSurfaceCreateFailed;
@@ -389,17 +412,21 @@ pub const EglWindow = struct {
     }
 };
 
-pub fn runGrayLayerShellAnimation() !void {
-    var client = try Client.connect();
+pub fn runLayerShellBackground(options: RunOptions) !void {
+    var client = try Client.connect(options.output_name);
     defer client.deinit();
 
     const egl_version = try client.ensureEglDisplay();
     _ = egl_version;
 
     var background: LayerBackground = undefined;
-    try background.init(&client);
+    try background.init(&client, options);
     defer background.deinit();
     try background.run();
+}
+
+pub fn runGrayLayerShellAnimation() !void {
+    return runLayerShellBackground(.{});
 }
 
 const LayerBackground = struct {
@@ -413,8 +440,10 @@ const LayerBackground = struct {
     width: i32 = 1280,
     height: i32 = 720,
     has_size: bool = false,
+    mpv_renderer: ?native_c.MpvRenderer = null,
+    animation_start_ns: i128 = 0,
 
-    fn init(self: *LayerBackground, client: *Client) !void {
+    fn init(self: *LayerBackground, client: *Client, options: RunOptions) !void {
         var surface = try client.createSurface();
         const layer_surface = client.createBackgroundLayerSurface(&surface, "waystream") catch |err| {
             surface.deinit();
@@ -428,6 +457,7 @@ const LayerBackground = struct {
             .state = .{
                 .client = client,
             },
+            .animation_start_ns = std.time.nanoTimestamp(),
         };
         errdefer self.deinit();
 
@@ -493,6 +523,10 @@ const LayerBackground = struct {
 
         self.egl_window = try client.createEglWindow(&self.surface, self.width, self.height);
         try self.initEglRenderer();
+
+        if (options.video_path) |video_path| {
+            self.mpv_renderer = try native_c.MpvRenderer.init(video_path);
+        }
     }
 
     fn initEglRenderer(self: *LayerBackground) !void {
@@ -557,7 +591,6 @@ const LayerBackground = struct {
         const egl_display = self.client.egl_display orelse return error.EglDisplayInitFailed;
         const egl_surface = self.egl_surface orelse return error.EglWindowSurfaceCreateFailed;
         const frame_time_ns: u64 = std.time.ns_per_s / 60;
-        const start_ns = std.time.nanoTimestamp();
 
         while (!self.state.closed) {
             if (self.client.runtime.wayland.display_dispatch_pending(self.client.display) < 0) {
@@ -579,17 +612,27 @@ const LayerBackground = struct {
                 self.state.needs_resize = false;
             }
 
-            const now_ns = std.time.nanoTimestamp();
-            const elapsed_s = @as(f64, @floatFromInt(now_ns - start_ns)) / @as(f64, @floatFromInt(std.time.ns_per_s));
-            const wave = 0.5 + 0.5 * std.math.sin(elapsed_s * 0.8);
-            const gray = 0.15 + 0.70 * wave;
-            glClearColor(
-                @as(f32, @floatCast(gray)),
-                @as(f32, @floatCast(gray)),
-                @as(f32, @floatCast(gray)),
-                1.0,
-            );
-            glClear(GL_COLOR_BUFFER_BIT);
+            if (self.mpv_renderer) |*mpv_renderer| {
+                if (mpv_renderer.drainEvents()) {
+                    self.state.closed = true;
+                    continue;
+                }
+                glClearColor(0.0, 0.0, 0.0, 1.0);
+                glClear(GL_COLOR_BUFFER_BIT);
+                try mpv_renderer.render(self.width, self.height);
+            } else {
+                const now_ns = std.time.nanoTimestamp();
+                const elapsed_s = @as(f64, @floatFromInt(now_ns - self.animation_start_ns)) / @as(f64, @floatFromInt(std.time.ns_per_s));
+                const wave = 0.5 + 0.5 * std.math.sin(elapsed_s * 0.8);
+                const gray = 0.15 + 0.70 * wave;
+                glClearColor(
+                    @as(f32, @floatCast(gray)),
+                    @as(f32, @floatCast(gray)),
+                    @as(f32, @floatCast(gray)),
+                    1.0,
+                );
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
             if (eglSwapBuffers(egl_display, egl_surface) == EGL_FALSE) {
                 return error.EglSwapFailed;
             }
@@ -600,6 +643,10 @@ const LayerBackground = struct {
     }
 
     fn deinit(self: *LayerBackground) void {
+        if (self.mpv_renderer) |*mpv_renderer| {
+            mpv_renderer.deinit();
+        }
+
         const egl_display = self.client.egl_display;
         if (egl_display) |display| {
             if (self.egl_context != null or self.egl_surface != null) {
@@ -669,6 +716,72 @@ fn bindRegistry(
     );
 }
 
+fn resolveOutputByName(
+    runtime: *const Runtime,
+    display: *wl_display,
+    registry: *wl_registry,
+    output_globals: []const Global,
+    output_name: []const u8,
+) !*wl_output {
+    if (output_globals.len == 0) {
+        log.err("requested output {s}, but compositor reported no wl_output globals", .{output_name});
+        return error.OutputNotFound;
+    }
+
+    var probes: [MaxOutputs]OutputProbe = undefined;
+    var probe_count: usize = 0;
+    for (output_globals) |global| {
+        const output_proxy = bindRegistry(runtime, registry, global, runtime.wayland.output_interface) orelse return error.OutputBindFailed;
+        const output: *wl_output = @ptrCast(output_proxy);
+        probes[probe_count] = .{
+            .handle = output,
+            .global = global,
+        };
+        const listener_impl = @as([*]const ?*const fn () callconv(.c) void, @ptrCast(&output_listener));
+        if (runtime.wayland.proxy_add_listener(output_proxy, listener_impl, &probes[probe_count]) != 0) {
+            runtime.wayland.proxy_destroy(output_proxy);
+            while (probe_count > 0) {
+                probe_count -= 1;
+                runtime.wayland.proxy_destroy(@ptrCast(probes[probe_count].handle));
+            }
+            return error.OutputListenerFailed;
+        }
+        probe_count += 1;
+    }
+    defer {
+        var i: usize = 0;
+        while (i < probe_count) : (i += 1) {
+            runtime.wayland.proxy_destroy(@ptrCast(probes[i].handle));
+        }
+    }
+
+    if (runtime.wayland.display_roundtrip(display) < 0) {
+        return error.OutputNameRoundtripFailed;
+    }
+
+    var selected: ?Global = null;
+    for (probes[0..probe_count]) |probe| {
+        if (std.mem.eql(u8, probe.nameSlice(), output_name)) {
+            selected = probe.global;
+            break;
+        }
+    }
+    if (selected == null) {
+        log.err("output {s} not found. available outputs:", .{output_name});
+        for (probes[0..probe_count]) |probe| {
+            if (probe.name_len > 0) {
+                log.err("  - {s}", .{probe.nameSlice()});
+            } else {
+                log.err("  - <unnamed-output:{d}>", .{probe.global.name});
+            }
+        }
+        return error.OutputNotFound;
+    }
+
+    const selected_proxy = bindRegistry(runtime, registry, selected.?, runtime.wayland.output_interface) orelse return error.OutputBindFailed;
+    return @ptrCast(selected_proxy);
+}
+
 fn onGlobal(
     data: ?*anyopaque,
     registry: *wl_registry,
@@ -695,6 +808,15 @@ fn onGlobal(
     }
     if (std.mem.eql(u8, iface, "zwlr_layer_shell_v1")) {
         globals.layer_shell = .{ .name = name, .version = version };
+        return;
+    }
+    if (std.mem.eql(u8, iface, "wl_output")) {
+        if (globals.output_count < globals.outputs.len) {
+            globals.outputs[globals.output_count] = .{ .name = name, .version = version };
+            globals.output_count += 1;
+        } else {
+            log.warn("ignoring wl_output global {d}: too many outputs", .{name});
+        }
     }
 }
 
@@ -711,6 +833,150 @@ fn onGlobalRemove(
 const registry_listener: wl_registry_listener = .{
     .global = onGlobal,
     .global_remove = onGlobalRemove,
+};
+
+const OutputProbe = struct {
+    handle: *wl_output,
+    global: Global,
+    name_len: usize = 0,
+    name: [64]u8 = [_]u8{0} ** 64,
+
+    fn nameSlice(self: *const OutputProbe) []const u8 {
+        return self.name[0..self.name_len];
+    }
+};
+
+const wl_output_listener = extern struct {
+    geometry: ?*const fn (
+        data: ?*anyopaque,
+        output: *wl_output,
+        x: i32,
+        y: i32,
+        physical_width: i32,
+        physical_height: i32,
+        subpixel: i32,
+        make: [*:0]const u8,
+        model: [*:0]const u8,
+        transform: i32,
+    ) callconv(.c) void,
+    mode: ?*const fn (
+        data: ?*anyopaque,
+        output: *wl_output,
+        flags: u32,
+        width: i32,
+        height: i32,
+        refresh: i32,
+    ) callconv(.c) void,
+    done: ?*const fn (
+        data: ?*anyopaque,
+        output: *wl_output,
+    ) callconv(.c) void,
+    scale: ?*const fn (
+        data: ?*anyopaque,
+        output: *wl_output,
+        factor: i32,
+    ) callconv(.c) void,
+    name: ?*const fn (
+        data: ?*anyopaque,
+        output: *wl_output,
+        name: [*:0]const u8,
+    ) callconv(.c) void,
+    description: ?*const fn (
+        data: ?*anyopaque,
+        output: *wl_output,
+        description: [*:0]const u8,
+    ) callconv(.c) void,
+};
+
+fn onOutputGeometry(
+    data: ?*anyopaque,
+    output: *wl_output,
+    x: i32,
+    y: i32,
+    physical_width: i32,
+    physical_height: i32,
+    subpixel: i32,
+    make: [*:0]const u8,
+    model: [*:0]const u8,
+    transform: i32,
+) callconv(.c) void {
+    _ = data;
+    _ = output;
+    _ = x;
+    _ = y;
+    _ = physical_width;
+    _ = physical_height;
+    _ = subpixel;
+    _ = make;
+    _ = model;
+    _ = transform;
+}
+
+fn onOutputMode(
+    data: ?*anyopaque,
+    output: *wl_output,
+    flags: u32,
+    width: i32,
+    height: i32,
+    refresh: i32,
+) callconv(.c) void {
+    _ = data;
+    _ = output;
+    _ = flags;
+    _ = width;
+    _ = height;
+    _ = refresh;
+}
+
+fn onOutputDone(
+    data: ?*anyopaque,
+    output: *wl_output,
+) callconv(.c) void {
+    _ = data;
+    _ = output;
+}
+
+fn onOutputScale(
+    data: ?*anyopaque,
+    output: *wl_output,
+    factor: i32,
+) callconv(.c) void {
+    _ = data;
+    _ = output;
+    _ = factor;
+}
+
+fn onOutputName(
+    data: ?*anyopaque,
+    output: *wl_output,
+    output_name: [*:0]const u8,
+) callconv(.c) void {
+    _ = output;
+    const ptr = data orelse return;
+    const probe: *OutputProbe = @ptrCast(@alignCast(ptr));
+    const src = std.mem.span(output_name);
+    const len = @min(src.len, probe.name.len);
+    @memcpy(probe.name[0..len], src[0..len]);
+    probe.name_len = len;
+}
+
+fn onOutputDescription(
+    data: ?*anyopaque,
+    output: *wl_output,
+    description: [*:0]const u8,
+) callconv(.c) void {
+    _ = data;
+    _ = output;
+    _ = description;
+}
+
+const output_listener: wl_output_listener = .{
+    .geometry = onOutputGeometry,
+    .mode = onOutputMode,
+    .done = onOutputDone,
+    .scale = onOutputScale,
+    .name = onOutputName,
+    .description = onOutputDescription,
 };
 
 const zwlr_layer_surface_v1_listener = extern struct {
@@ -824,6 +1090,7 @@ const WaylandFns = struct {
     registry_interface: *const wl_interface,
     compositor_interface: *const wl_interface,
     surface_interface: *const wl_interface,
+    output_interface: *const wl_interface,
 
     fn load(lib: *std.DynLib) !WaylandFns {
         return .{
@@ -891,6 +1158,11 @@ const WaylandFns = struct {
                 *const wl_interface,
                 lib,
                 "wl_surface_interface",
+            ),
+            .output_interface = try loadRequired(
+                *const wl_interface,
+                lib,
+                "wl_output_interface",
             ),
         };
     }
