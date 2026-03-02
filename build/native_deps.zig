@@ -39,11 +39,6 @@ pub fn buildNativeDeps(b: *std.Build, options: Options) !Artifacts {
         return error.UnsupportedTarget;
     }
 
-    std.log.info("native deps: libmpv {s}, mimalloc {s}", .{
-        options.mpv_version,
-        options.mimalloc_version,
-    });
-
     const buildtype: []const u8 = switch (options.optimize) {
         .Debug => "debug",
         .ReleaseSafe, .ReleaseFast => "release",

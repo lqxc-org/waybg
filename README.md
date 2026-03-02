@@ -1,6 +1,6 @@
 # waystream
 
-`waystream` is a Zig + raylib codebase for building an mpvpaper-style wallpaper/video background app with direct C-level API control.
+`waystream` is a Zig codebase for building an mpvpaper-style wallpaper/video background app with direct C-level API control.
 
 ## Dynamic Wayland Layer-Shell Background (Current)
 
@@ -14,6 +14,9 @@ The project now includes a Wayland/EGL layer-shell path in [`src/wayland_client.
 Current runtime behavior:
 
 - On start, `waystream` tries to run as a Wayland layer-shell background app.
+- `waystream --video /path/to/file.mp4` (or `waystream /path/to/file.mp4`) plays video via `libmpv` with `audio=no` and `loop-file=inf`.
+- `waystream --output DP-1 --video /path/to/file.mp4` targets a specific Wayland output name (connector).
+- If no video path is provided, it renders the existing grayscale wave animation.
 - If Wayland connection/setup fails, it exits with an explicit error.
 
 This is the foundation step toward mpvpaper-style zero-copy video presentation on Wayland/Niri.
@@ -21,30 +24,21 @@ This is the foundation step toward mpvpaper-style zero-copy video presentation o
 ## Prerequisites
 
 - Zig `0.15.2`
-- `just` (optional, but recommended)
 - `curl`, `tar`, `meson`, `ninja` (for native `libmpv` build)
 
 ## Developer Commands
 
-If you use `just`:
+Use `zig build` targets directly:
 
-- `just fmt`: format Zig sources
-- `just fmt-check`: fail if formatting is needed
-- `just build`: debug build
-- `just run`: run the app
-- `just test`: run unit tests
-- `just check`: run CI-equivalent checks
-- `just release`: build release artifacts in `dist/`
-- `just release-version 0.1.0`: override release artifact version suffix
-- `just clean`: remove local build outputs
-
-You can run the same targets directly with `zig build`:
-
+- `zig build` (debug build)
+- `zig build run`
+- `zig build test`
 - `zig build fmt`
 - `zig build fmt-check`
 - `zig build ci`
 - `zig build package -Doptimize=ReleaseSafe --prefix dist`
 - `zig build package -Doptimize=ReleaseSafe --prefix dist -Drelease-version=0.1.0`
+- `zig build musl-release --prefix dist`
 
 By default, `package` uses `.version` from `build.zig.zon` for artifact naming. Use `-Drelease-version` to override.
 
@@ -58,6 +52,7 @@ By default, `package` uses `.version` from `build.zig.zon` for artifact naming. 
 Useful options:
 
 - `-Dnative-deps=true`: enable native dependency build (defaults to true on `x86_64-linux-musl`)
+- `-Dsystem-mpv=true`: link host/system `libmpv` dynamically (defaults to true on non-musl Linux)
 - `-Dasan=true`: enable AddressSanitizer flags for native dependency builds
 - `-Dlto=false`: disable executable LTO
 - `-Dlibmpv-version=0.39.0`: set mpv version (URL defaults from this)
@@ -69,7 +64,13 @@ Useful options:
 Example:
 
 ```sh
-zig build -Dtarget=x86_64-linux-musl -Dnative-deps=true -Doptimize=ReleaseFast
+zig build musl-release --prefix dist
+```
+
+For normal Linux host builds, this is enough for video support:
+
+```sh
+zig build -Doptimize=ReleaseSafe
 ```
 
 ## CI and Release
