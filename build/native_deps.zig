@@ -121,7 +121,7 @@ pub fn buildNativeDeps(b: *std.Build, options: Options) !Artifacts {
         \\rm -rf "$mimalloc_build" "$mimalloc_prefix"
         \\mkdir -p "$mimalloc_build" "$mimalloc_prefix/lib" "$mimalloc_prefix/include"
         \\
-        \\mimalloc_cc=("${WAYSTREAM_ZIG_EXE}" cc -target x86_64-linux-musl "$WAYSTREAM_OPT_LEVEL" -fPIC -DMI_MALLOC_OVERRIDE=1 -DMI_STATIC_LIB=1 -I"$mimalloc_src/include" -I"$mimalloc_src/src")
+        \\mimalloc_cc=("${WAYSTREAM_ZIG_EXE}" cc -target x86_64-linux-musl "$WAYSTREAM_OPT_LEVEL" -fPIC -Wno-error=date-time -DMI_MALLOC_OVERRIDE=1 -DMI_STATIC_LIB=1 -I"$mimalloc_src/include" -I"$mimalloc_src/src")
         \\if [ "$WAYSTREAM_ASAN" = "1" ]; then
         \\  mimalloc_cc+=(-fsanitize=address)
         \\fi
