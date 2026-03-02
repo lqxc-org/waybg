@@ -95,6 +95,14 @@ pub fn buildNativeDeps(b: *std.Build, options: Options) !Artifacts {
         \\extract_tarball "$mpv_tar" "$mpv_src"
         \\extract_tarball "$mimalloc_tar" "$mimalloc_src"
         \\
+        \\zig_bin_dir="$(dirname "$WAYSTREAM_ZIG_EXE")"
+        \\zig_lib_dir="$(cd "$zig_bin_dir/../lib" && pwd)"
+        \\zig_include="$zig_lib_dir/include"
+        \\zig_musl_include_x86_64="$zig_lib_dir/libc/include/x86_64-linux-musl"
+        \\zig_musl_include_generic="$zig_lib_dir/libc/include/generic-musl"
+        \\zig_musl_include_x86_any="$zig_lib_dir/libc/include/x86-linux-any"
+        \\zig_musl_include_linux_any="$zig_lib_dir/libc/include/any-linux-any"
+        \\
         \\cross_file="$work_dir/meson-cross-x86_64-linux-musl.ini"
         \\cat >"$cross_file" <<EOF
         \\[binaries]
@@ -112,8 +120,8 @@ pub fn buildNativeDeps(b: *std.Build, options: Options) !Artifacts {
         \\
         \\[properties]
         \\needs_exe_wrapper = false
-        \\c_args = ['-fPIC', '-I/usr/include', '-I/usr/include/x86_64-linux-gnu']
-        \\cpp_args = ['-fPIC', '-I/usr/include', '-I/usr/include/x86_64-linux-gnu']
+        \\c_args = ['-fPIC', '-I${zig_musl_include_x86_64}', '-I${zig_musl_include_generic}', '-I${zig_musl_include_x86_any}', '-I${zig_musl_include_linux_any}', '-I${zig_include}']
+        \\cpp_args = ['-fPIC', '-I${zig_musl_include_x86_64}', '-I${zig_musl_include_generic}', '-I${zig_musl_include_x86_any}', '-I${zig_musl_include_linux_any}', '-I${zig_include}']
         \\c_link_args = ['-static']
         \\cpp_link_args = ['-static']
         \\EOF
