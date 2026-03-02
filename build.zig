@@ -130,6 +130,15 @@ pub fn build(b: *std.Build) !void {
         };
         const root_module = app_build.createRootModule(native_app_ctx);
         const exe = app_build.createNativeExecutable(native_app_ctx, root_module);
+        exe.root_module.linkSystemLibrary("EGL", .{
+            .preferred_link_mode = .dynamic,
+        });
+        exe.root_module.linkSystemLibrary("wayland-egl", .{
+            .preferred_link_mode = .dynamic,
+        });
+        exe.root_module.linkSystemLibrary("GLESv2", .{
+            .preferred_link_mode = .dynamic,
+        });
         if (enable_lto) {
             exe.want_lto = true;
         }

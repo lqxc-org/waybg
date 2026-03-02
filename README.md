@@ -2,6 +2,22 @@
 
 `waystream` is a Zig + raylib codebase for building an mpvpaper-style wallpaper/video background app with direct C-level API control.
 
+## Dynamic Wayland Layer-Shell Background (Current)
+
+The project now includes a Wayland/EGL layer-shell path in [`src/wayland_client.zig`](src/wayland_client.zig):
+
+- Dynamically loads `libwayland-client.so` at runtime (no static Wayland link required)
+- Links `EGL`, `wayland-egl`, and `GLESv2` as shared libraries at build time
+- Connects to `wl_display`, discovers globals, binds `wl_compositor` and `zwlr_layer_shell_v1`
+- Creates a fullscreen background `zwlr_layer_surface_v1` and draws an animated grayscale wave
+
+Current runtime behavior:
+
+- On start, `waystream` tries to run as a Wayland layer-shell background app.
+- If Wayland connection/setup fails, it exits with an explicit error.
+
+This is the foundation step toward mpvpaper-style zero-copy video presentation on Wayland/Niri.
+
 ## Prerequisites
 
 - Zig `0.15.2`
