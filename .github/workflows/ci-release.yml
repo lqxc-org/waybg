@@ -125,23 +125,12 @@ jobs:
       - name: Build release artifact
         run: zig build package -Doptimize=ReleaseSafe --prefix dist -Drelease-version=${{ steps.version.outputs.package_version }}
 
-      - name: Build musl release artifact
-        run: zig build musl-release --prefix dist-musl -Drelease-version=${{ steps.version.outputs.package_version }}
-
       - name: Upload build artifact
         id: upload_host
         uses: actions/upload-artifact@v4
         with:
           name: waystream-linux-x86_64-${{ github.sha }}
           path: dist/*
-          if-no-files-found: error
-
-      - name: Upload musl build artifact
-        id: upload_musl
-        uses: actions/upload-artifact@v4
-        with:
-          name: waystream-linux-x86_64-musl-${{ github.sha }}
-          path: dist-musl/*
           if-no-files-found: error
 
       - name: Add artifact download links
@@ -152,7 +141,6 @@ jobs:
             echo "### Build Artifacts"
             echo ""
             echo "- [waystream-linux-x86_64-${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload_host.outputs.artifact-id }})"
-            echo "- [waystream-linux-x86_64-musl-${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload_musl.outputs.artifact-id }})"
             echo "- [All artifacts for this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts)"
           } >> "${GITHUB_STEP_SUMMARY}"
 
@@ -211,18 +199,11 @@ jobs:
           name: waystream-linux-x86_64-${{ github.sha }}
           path: dist
 
-      - name: Download musl build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: waystream-linux-x86_64-musl-${{ github.sha }}
-          path: dist-musl
-
       - name: Ensure Linux ELF is executable
         shell: bash
         run: |
           set -euo pipefail
           chmod u+x dist/*-linux-x86_64-elf
-          chmod u+x dist-musl/*-linux-x86_64-musl
 
       - name: Create or update release
         uses: softprops/action-gh-release@v2
@@ -231,7 +212,6 @@ jobs:
           name: ${{ needs.package.outputs.release_tag }}
           files: |
             dist/*-linux-x86_64-elf
-            dist-musl/*-linux-x86_64-musl
             dist/SHA256SUMS.txt
           generate_release_notes: true
           overwrite_files: true
@@ -255,18 +235,11 @@ jobs:
           name: waystream-linux-x86_64-${{ github.sha }}
           path: dist
 
-      - name: Download musl build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: waystream-linux-x86_64-musl-${{ github.sha }}
-          path: dist-musl
-
       - name: Ensure Linux ELF is executable
         shell: bash
         run: |
           set -euo pipefail
           chmod u+x dist/*-linux-x86_64-elf
-          chmod u+x dist-musl/*-linux-x86_64-musl
 
       - name: Move rolling test tag
         shell: bash
@@ -288,5 +261,4 @@ jobs:
             Commit: `${{ github.sha }}`
           files: |
             dist/*-linux-x86_64-elf
-            dist-musl/*-linux-x86_64-musl
             dist/SHA256SUMS.txt
