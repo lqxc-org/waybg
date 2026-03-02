@@ -112,8 +112,8 @@ pub fn buildNativeDeps(b: *std.Build, options: Options) !Artifacts {
         \\
         \\[properties]
         \\needs_exe_wrapper = false
-        \\c_args = ['-fPIC']
-        \\cpp_args = ['-fPIC']
+        \\c_args = ['-fPIC', '-I/usr/include', '-I/usr/include/x86_64-linux-gnu']
+        \\cpp_args = ['-fPIC', '-I/usr/include', '-I/usr/include/x86_64-linux-gnu']
         \\c_link_args = ['-static']
         \\cpp_link_args = ['-static']
         \\EOF
@@ -121,7 +121,7 @@ pub fn buildNativeDeps(b: *std.Build, options: Options) !Artifacts {
         \\rm -rf "$mimalloc_build" "$mimalloc_prefix"
         \\mkdir -p "$mimalloc_build" "$mimalloc_prefix/lib" "$mimalloc_prefix/include"
         \\
-        \\mimalloc_cc=("${WAYSTREAM_ZIG_EXE}" cc -target x86_64-linux-musl "$WAYSTREAM_OPT_LEVEL" -fPIC -Wno-error=date-time -DMI_MALLOC_OVERRIDE=1 -DMI_STATIC_LIB=1 -I"$mimalloc_src/include" -I"$mimalloc_src/src")
+        \\mimalloc_cc=("${WAYSTREAM_ZIG_EXE}" cc -target x86_64-linux-musl "$WAYSTREAM_OPT_LEVEL" -fPIC -Wno-date-time -Wno-error=date-time -DMI_MALLOC_OVERRIDE=1 -DMI_STATIC_LIB=1 -I"$mimalloc_src/include" -I"$mimalloc_src/src")
         \\if [ "$WAYSTREAM_ASAN" = "1" ]; then
         \\  mimalloc_cc+=(-fsanitize=address)
         \\fi
@@ -142,6 +142,10 @@ pub fn buildNativeDeps(b: *std.Build, options: Options) !Artifacts {
         \\  "--cross-file" "$cross_file"
         \\  "-Dlibmpv=true"
         \\  "-Dcplayer=false"
+        \\  "-Dbuild-date=false"
+        \\  "-Dmanpage-build=disabled"
+        \\  "-Dwayland=disabled"
+        \\  "-Dx11=disabled"
         \\)
         \\if [ "$WAYSTREAM_ASAN" = "1" ]; then
         \\  meson_setup_args+=("-Db_sanitize=address")
@@ -170,6 +174,7 @@ pub fn buildNativeDeps(b: *std.Build, options: Options) !Artifacts {
     ;
 
     const cmd = b.addSystemCommand(&.{ "bash", "-uec", script, "--" });
+    cmd.stdio = .inherit;
     const work_dir = cmd.addOutputDirectoryArg("native-deps-work");
     const mpv_install_dir = cmd.addOutputDirectoryArg("native-deps-mpv");
     const mimalloc_install_dir = cmd.addOutputDirectoryArg("native-deps-mimalloc");
