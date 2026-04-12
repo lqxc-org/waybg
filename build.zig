@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
     // to our consumers. We must give it a name because a Zig package can expose
     // multiple modules and consumers will need to be able to specify which
     // module they want to access.
-    const mod = b.addModule("waystream", .{
+    const mod = b.addModule("zcwp", .{
         // The root source file is the "entry point" of this module. Users of
         // this module will only be able to access public declarations contained
         // in this file, which means that if you have declarations that you
@@ -104,6 +104,7 @@ pub fn build(b: *std.Build) void {
     scanner.generate("wl_seat", 4);
     scanner.generate("xdg_wm_base", 3);
     scanner.generate("ext_session_lock_manager_v1", 1);
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
@@ -121,7 +122,7 @@ pub fn build(b: *std.Build) void {
     // If neither case applies to you, feel free to delete the declaration you
     // don't need and to put everything under a single module.
     const exe = b.addExecutable(.{
-        .name = "waystream",
+        .name = "zcwp",
         .root_module = b.createModule(.{
             // b.createModule defines a new module just like b.addModule but,
             // unlike b.addModule, it does not expose the module to consumers of
@@ -136,12 +137,12 @@ pub fn build(b: *std.Build) void {
             // List of modules available for import in source files part of the
             // root module.
             .imports = &.{
-                // Here "waystream" is the name you will use in your source code to
-                // import this module (e.g. `@import("waystream")`). The name is
+                // Here "zcwp" is the name you will use in your source code to
+                // import this module (e.g. `@import("zcwp")`). The name is
                 // repeated because you are allowed to rename your imports, which
                 // can be extremely useful in case of collisions (which can happen
                 // importing modules from different packages).
-                .{ .name = "waystream", .module = mod },
+                .{ .name = "zcwp", .module = mod },
             },
         }),
     });

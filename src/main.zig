@@ -1,4 +1,4 @@
 const std = @import("std");
-const waystream = @import("waystream");
+const zcwp = @import("zcwp");
 
 pub fn main() !void {}
