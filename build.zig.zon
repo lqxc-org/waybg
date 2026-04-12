@@ -61,6 +61,18 @@
         //    // actually used.
         //    .lazy = false,
         //},
+        .libmimalloc = .{
+            .url = "https://github.com/microsoft/mimalloc/archive/refs/tags/v3.2.8.tar.gz",
+            .hash = "N-V-__8AAAqCVABZiZaLXWRManwn6-SeQzXoA1snC5IbYiEi",
+        },
+        .vulkan_zig = .{
+            .url = "https://github.com/Snektron/vulkan-zig/archive/3ada9e2989bab70090a55f0f6fac19ea90d06357.tar.gz",
+            .hash = "vulkan-0.0.0-r7Ytx6FIAwD3QyrrJhvObO0YSZ6WEkMGSCPKbhM__HFd",
+        },
+        .wayland = .{
+            .url = "https://github.com/ifreund/zig-wayland/archive/0b7fc007d6f402496e3ad2d6a7cc9118a2080aa9.tar.gz",
+            .hash = "wayland-0.5.0-lQa1knz8AQCh08NA8BeQrwJB9U3CfqcVAdHZYGRKIGuu",
+        },
     },
     // Specifies the set of files and directories that are included in this package.
     // Only files and directories listed here are included in the `hash` that

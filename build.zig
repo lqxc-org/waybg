@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const Scanner = @import("wayland").Scanner;
+
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
 // executed by an external runner. The functions in `std.Build` implement a DSL
@@ -7,14 +9,7 @@ const std = @import("std");
 // build runner to parallelize the build automatically (and the cache system to
 // know when a step doesn't need to be re-run).
 pub fn build(b: *std.Build) void {
-    // Standard target options allow the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
@@ -41,6 +36,74 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    const libmimalloc_deps = b.dependency("libmimalloc", .{});
+
+    const mimalloc_module = b.createModule(.{
+        // fmt comment
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    // TODO: Adding secure/padding/mem check support like optimize with mem check or address check
+    mimalloc_module.addCSourceFiles(.{
+        .root = libmimalloc_deps.path(""),
+        .flags = &.{
+            // fmt
+            "-O3", "-DMI_BUILD_TESTS=OFF", "-DMI_LIBC_MUSL=ON",
+        },
+        .files = &.{
+            // Mimalloc c files
+            "src/alloc.c",
+            "src/alloc-aligned.c",
+            "src/alloc-posix.c",
+            "src/arena.c",
+            "src/arena-meta.c",
+            "src/bitmap.c",
+            "src/heap.c",
+            "src/init.c",
+            "src/libc.c",
+            "src/options.c",
+            "src/os.c",
+            "src/page.c",
+            "src/page-map.c",
+            "src/random.c",
+            "src/stats.c",
+            "src/theap.c",
+            "src/threadlocal.c",
+            "src/prim/prim.c",
+        },
+    });
+
+    mimalloc_module.addIncludePath(libmimalloc_deps.path("include"));
+
+    const libmimalloc = b.addLibrary(.{
+        // fmt
+        .linkage = .static,
+        .name = "libmimalloc",
+        .root_module = mimalloc_module,
+    });
+
+    const vulkan = b.dependency("vulkan_zig", .{
+        .registry = b.path("./vk.xml"),
+    }).module("vulkan-zig");
+
+    const scanner = Scanner.create(b, .{});
+
+    const wayland = b.createModule(.{ .root_source_file = scanner.result });
+
+    scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
+    scanner.addSystemProtocol("staging/ext-session-lock/ext-session-lock-v1.xml");
+
+    // Pass the maximum version implemented by your wayland server or client.
+    // Requests, events, enums, etc. from newer versions will not be generated,
+    // ensuring forwards compatibility with newer protocol xml.
+    // This will also generate code for interfaces created using the provided
+    // global interface, in this example wl_keyboard, wl_pointer, xdg_surface,
+    // xdg_toplevel, etc. would be generated as well.
+    scanner.generate("wl_seat", 4);
+    scanner.generate("xdg_wm_base", 3);
+    scanner.generate("ext_session_lock_manager_v1", 1);
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
@@ -82,6 +145,16 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+
+    exe.root_module.addImport("vulkan", vulkan);
+    exe.root_module.addImport("wayland", wayland);
+
+    exe.linkLibrary(libmimalloc);
+
+    // Use System MPV and Wayland Client
+    exe.linkSystemLibrary2("mpv", .{});
+    exe.linkSystemLibrary2("wayland-client", .{});
+    exe.linkLibC();
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
@@ -131,6 +204,8 @@ pub fn build(b: *std.Build) void {
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
     });
+
+    exe_tests.linkLibrary(libmimalloc);
 
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
