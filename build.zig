@@ -1,244 +1,232 @@
 const std = @import("std");
-const config = @import("build/config.zig");
-const app_build = @import("build/app.zig");
-const build_steps = @import("build/steps.zig");
-const metadata = @import("build/metadata.zig");
-const native_deps = @import("build/native_deps.zig");
 
-pub fn build(b: *std.Build) !void {
+const Scanner = @import("wayland").Scanner;
+
+// Although this function looks imperative, it does not perform the build
+// directly and instead it mutates the build graph (`b`) that will be then
+// executed by an external runner. The functions in `std.Build` implement a DSL
+// for defining build steps and express dependencies between them, allowing the
+// build runner to parallelize the build automatically (and the cache system to
+// know when a step doesn't need to be re-run).
+pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const target_is_linux = target.result.os.tag == .linux;
-    const target_is_musl_native = target_is_linux and target.result.abi == .musl and target.result.cpu.arch == .x86_64;
-    const native_deps_enabled = b.option(
-        bool,
-        "native-deps",
-        "Enable libmpv/mimalloc native dependency build (supported on x86_64-linux-musl)",
-    ) orelse target_is_musl_native;
-    const system_mpv_enabled = b.option(
-        bool,
-        "system-mpv",
-        "Link system libmpv dynamically (default on non-musl Linux)",
-    ) orelse (target_is_linux and !native_deps_enabled);
-    if (native_deps_enabled and system_mpv_enabled) {
-        std.log.err("choose only one: -Dnative-deps=true or -Dsystem-mpv=true", .{});
-        return error.InvalidOption;
-    }
+    // It's also possible to define more custom flags to toggle optional features
+    // of this build script using `b.option()`. All defined flags (including
+    // target and optimize options) will be listed when running `zig build --help`
+    // in this directory.
 
-    const default_release_version = metadata.readPackageVersion(b.allocator, b.pathFromRoot("build.zig.zon")) catch "dev";
-    const release_version = b.option(
-        []const u8,
-        "release-version",
-        "Release version for artifact naming (default: build.zig.zon .version)",
-    ) orelse default_release_version;
-    const asan = b.option(bool, "asan", "Enable AddressSanitizer for native dependencies") orelse false;
-    const enable_lto = b.option(bool, "lto", "Enable link-time optimization for native executable") orelse (optimize != .Debug);
-    const libmpv_version = b.option(
-        []const u8,
-        "libmpv-version",
-        "mpv release version (without leading v)",
-    ) orelse "0.39.0";
-    const libmpv_tarball_url = b.option(
-        []const u8,
-        "libmpv-tarball-url",
-        "Override libmpv tarball URL",
-    ) orelse b.fmt("https://github.com/mpv-player/mpv/archive/refs/tags/v{s}.tar.gz", .{libmpv_version});
-    const libmpv_extra_meson_args = b.option(
-        []const u8,
-        "libmpv-extra-meson-args",
-        "Extra args passed to mpv meson setup (space-separated)",
-    ) orelse "";
-    const mimalloc_version = b.option(
-        []const u8,
-        "mimalloc-version",
-        "mimalloc release tag",
-    ) orelse "v3.2.8";
-    const mimalloc_tarball_url = b.option(
-        []const u8,
-        "mimalloc-tarball-url",
-        "Override mimalloc tarball URL",
-    ) orelse b.fmt(
-        "https://github.com/microsoft/mimalloc/archive/refs/tags/{s}.tar.gz",
-        .{mimalloc_version},
-    );
-    const has_mpv = native_deps_enabled or system_mpv_enabled;
-    const has_mimalloc = native_deps_enabled;
-    const effective_libmpv_version = if (native_deps_enabled) libmpv_version else if (system_mpv_enabled) "system" else "disabled";
-    const effective_mimalloc_version = if (native_deps_enabled) mimalloc_version else "disabled";
+    // This creates a module, which represents a collection of source files alongside
+    // some compilation options, such as optimization mode and linked system libraries.
+    // Zig modules are the preferred way of making Zig code available to consumers.
+    // addModule defines a module that we intend to make available for importing
+    // to our consumers. We must give it a name because a Zig package can expose
+    // multiple modules and consumers will need to be able to specify which
+    // module they want to access.
+    const mod = b.addModule("zcwp", .{
+        // The root source file is the "entry point" of this module. Users of
+        // this module will only be able to access public declarations contained
+        // in this file, which means that if you have declarations that you
+        // intend to expose to consumers that were defined in other files part
+        // of this module, you will have to make sure to re-export them from
+        // the root file.
+        .root_source_file = b.path("src/root.zig"),
+        // Later on we'll use this module as the root module of a test executable
+        // which requires us to specify a target.
+        .target = target,
+    });
 
-    const app_ctx: app_build.Context = .{
-        .b = b,
+    const libmimalloc_deps = b.dependency("libmimalloc", .{});
+
+    const mimalloc_module = b.createModule(.{
+        // fmt comment
         .target = target,
         .optimize = optimize,
-        .has_mpv = false,
-        .has_mimalloc = false,
-        .libmpv_version = "disabled",
-        .mimalloc_version = "disabled",
-    };
+        .link_libc = true,
+    });
 
-    const run_step = b.step("run", "Run the app");
-    const test_step = b.step("test", "Run unit tests on host");
-    const run_unit_tests = app_build.addUnitTests(app_ctx);
-    test_step.dependOn(&run_unit_tests.step);
+    // TODO: Adding secure/padding/mem check support like optimize with mem check or address check
+    mimalloc_module.addCSourceFiles(.{
+        .root = libmimalloc_deps.path(""),
+        .flags = &.{
+            // fmt
+            "-O3", "-DMI_BUILD_TESTS=OFF", "-DMI_LIBC_MUSL=ON",
+        },
+        .files = &.{
+            // Mimalloc c files
+            "src/alloc.c",
+            "src/alloc-aligned.c",
+            "src/alloc-posix.c",
+            "src/arena.c",
+            "src/arena-meta.c",
+            "src/bitmap.c",
+            "src/heap.c",
+            "src/init.c",
+            "src/libc.c",
+            "src/options.c",
+            "src/os.c",
+            "src/page.c",
+            "src/page-map.c",
+            "src/random.c",
+            "src/stats.c",
+            "src/theap.c",
+            "src/threadlocal.c",
+            "src/prim/prim.c",
+        },
+    });
 
-    const fmt_steps = build_steps.addFmtSteps(b);
-    _ = build_steps.addCiStep(b, fmt_steps.fmt_check, b.getInstallStep(), test_step);
+    mimalloc_module.addIncludePath(libmimalloc_deps.path("include"));
 
-    if (target.query.os_tag == .emscripten) {
-        std.log.err("emscripten/web target is no longer supported", .{});
-        return error.UnsupportedTarget;
-    }
+    const libmimalloc = b.addLibrary(.{
+        // fmt
+        .linkage = .static,
+        .name = "libmimalloc",
+        .root_module = mimalloc_module,
+    });
 
-    const native_app_ctx: app_build.Context = .{
-        .b = b,
-        .target = target,
-        .optimize = optimize,
-        .has_mpv = has_mpv,
-        .has_mimalloc = has_mimalloc,
-        .libmpv_version = effective_libmpv_version,
-        .mimalloc_version = effective_mimalloc_version,
-    };
-    const root_module = app_build.createRootModule(native_app_ctx);
-    const exe = app_build.createNativeExecutable(native_app_ctx, root_module);
-    configureExecutable(exe, has_mpv, enable_lto);
+    const vulkan = b.dependency("vulkan_zig", .{
+        .registry = b.path("./vk.xml"),
+    }).module("vulkan-zig");
 
-    if (native_deps_enabled) {
-        if (!target_is_musl_native) {
-            std.log.err(
-                "native deps require -Dtarget=x86_64-linux-musl (or disable with -Dnative-deps=false)",
-                .{},
-            );
-            return error.UnsupportedTarget;
-        }
+    const scanner = Scanner.create(b, .{});
 
-        const deps_options: native_deps.Options = .{
+    const wayland = b.createModule(.{ .root_source_file = scanner.result });
+
+    scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
+    scanner.addSystemProtocol("staging/ext-session-lock/ext-session-lock-v1.xml");
+
+    // Pass the maximum version implemented by your wayland server or client.
+    // Requests, events, enums, etc. from newer versions will not be generated,
+    // ensuring forwards compatibility with newer protocol xml.
+    // This will also generate code for interfaces created using the provided
+    // global interface, in this example wl_keyboard, wl_pointer, xdg_surface,
+    // xdg_toplevel, etc. would be generated as well.
+    scanner.generate("wl_seat", 4);
+    scanner.generate("xdg_wm_base", 3);
+    scanner.generate("ext_session_lock_manager_v1", 1);
+
+    // Here we define an executable. An executable needs to have a root module
+    // which needs to expose a `main` function. While we could add a main function
+    // to the module defined above, it's sometimes preferable to split business
+    // logic and the CLI into two separate modules.
+    //
+    // If your goal is to create a Zig library for others to use, consider if
+    // it might benefit from also exposing a CLI tool. A parser library for a
+    // data serialization format could also bundle a CLI syntax checker, for example.
+    //
+    // If instead your goal is to create an executable, consider if users might
+    // be interested in also being able to embed the core functionality of your
+    // program in their own executable in order to avoid the overhead involved in
+    // subprocessing your CLI tool.
+    //
+    // If neither case applies to you, feel free to delete the declaration you
+    // don't need and to put everything under a single module.
+    const exe = b.addExecutable(.{
+        .name = "zcwp",
+        .root_module = b.createModule(.{
+            // b.createModule defines a new module just like b.addModule but,
+            // unlike b.addModule, it does not expose the module to consumers of
+            // this package, which is why in this case we don't have to give it a name.
+            .root_source_file = b.path("src/main.zig"),
+            // Target and optimization levels must be explicitly wired in when
+            // defining an executable or library (in the root module), and you
+            // can also hardcode a specific target for an executable or library
+            // definition if desireable (e.g. firmware for embedded devices).
             .target = target,
             .optimize = optimize,
-            .asan = asan,
-            .mpv_version = libmpv_version,
-            .mpv_tarball_url = libmpv_tarball_url,
-            .mpv_extra_meson_args = libmpv_extra_meson_args,
-            .mimalloc_version = mimalloc_version,
-            .mimalloc_tarball_url = mimalloc_tarball_url,
-        };
-        try linkBundledDeps(b, exe, deps_options);
-    } else if (system_mpv_enabled) {
-        exe.root_module.linkSystemLibrary("mpv", .{
-            .preferred_link_mode = .dynamic,
-        });
-    }
+            // List of modules available for import in source files part of the
+            // root module.
+            .imports = &.{
+                // Here "zcwp" is the name you will use in your source code to
+                // import this module (e.g. `@import("zcwp")`). The name is
+                // repeated because you are allowed to rename your imports, which
+                // can be extremely useful in case of collisions (which can happen
+                // importing modules from different packages).
+                .{ .name = "zcwp", .module = mod },
+            },
+        }),
+    });
 
+    exe.root_module.addImport("vulkan", vulkan);
+    exe.root_module.addImport("wayland", wayland);
+
+    exe.linkLibrary(libmimalloc);
+
+    // Use System MPV and Wayland Client
+    exe.linkSystemLibrary2("mpv", .{});
+    exe.linkSystemLibrary2("wayland-client", .{});
+    exe.linkLibC();
+
+    // This declares intent for the executable to be installed into the
+    // install prefix when running `zig build` (i.e. when executing the default
+    // step). By default the install prefix is `zig-out/` but can be overridden
+    // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
 
+    // This creates a top level step. Top level steps have a name and can be
+    // invoked by name when running `zig build` (e.g. `zig build run`).
+    // This will evaluate the `run` step rather than the default step.
+    // For a top level step to actually do something, it must depend on other
+    // steps (e.g. a Run step, as we will see in a moment).
+    const run_step = b.step("run", "Run the app");
+
+    // This creates a RunArtifact step in the build graph. A RunArtifact step
+    // invokes an executable compiled by Zig. Steps will only be executed by the
+    // runner if invoked directly by the user (in the case of top level steps)
+    // or if another step depends on it, so it's up to you to define when and
+    // how this Run step will be executed. In our case we want to run it when
+    // the user runs `zig build run`, so we create a dependency link.
     const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-    _ = build_steps.addPackageStep(b, exe, release_version);
     run_step.dependOn(&run_cmd.step);
 
-    try addMuslReleaseStep(b, .{
-        .release_version = release_version,
-        .libmpv_version = libmpv_version,
-        .libmpv_tarball_url = libmpv_tarball_url,
-        .libmpv_extra_meson_args = libmpv_extra_meson_args,
-        .mimalloc_version = mimalloc_version,
-        .mimalloc_tarball_url = mimalloc_tarball_url,
-        .asan = asan,
-    });
-}
+    // By making the run step depend on the default step, it will be run from the
+    // installation directory rather than directly from within the cache directory.
+    run_cmd.step.dependOn(b.getInstallStep());
 
-const MuslReleaseOptions = struct {
-    release_version: []const u8,
-    libmpv_version: []const u8,
-    libmpv_tarball_url: []const u8,
-    libmpv_extra_meson_args: []const u8,
-    mimalloc_version: []const u8,
-    mimalloc_tarball_url: []const u8,
-    asan: bool,
-};
-
-fn addMuslReleaseStep(b: *std.Build, options: MuslReleaseOptions) !void {
-    const musl_release_step = b.step(
-        "musl-release",
-        "Build x86_64-linux-musl ReleaseSafe binary with bundled libmpv/mimalloc",
-    );
-    const musl_target = b.resolveTargetQuery(.{
-        .cpu_arch = .x86_64,
-        .os_tag = .linux,
-        .abi = .musl,
-    });
-    const musl_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
-    const app_ctx: app_build.Context = .{
-        .b = b,
-        .target = musl_target,
-        .optimize = musl_optimize,
-        .has_mpv = true,
-        .has_mimalloc = true,
-        .libmpv_version = options.libmpv_version,
-        .mimalloc_version = options.mimalloc_version,
-    };
-
-    const root_module = app_build.createRootModule(app_ctx);
-    const exe = app_build.createNativeExecutable(app_ctx, root_module);
-    configureExecutable(exe, true, true);
-
-    const deps_options: native_deps.Options = .{
-        .target = musl_target,
-        .optimize = musl_optimize,
-        .asan = options.asan,
-        .mpv_version = options.libmpv_version,
-        .mpv_tarball_url = options.libmpv_tarball_url,
-        .mpv_extra_meson_args = options.libmpv_extra_meson_args,
-        .mimalloc_version = options.mimalloc_version,
-        .mimalloc_tarball_url = options.mimalloc_tarball_url,
-    };
-    try linkBundledDeps(b, exe, deps_options);
-
-    const release_asset_name = b.fmt("{s}-{s}-linux-x86_64-musl", .{
-        config.app_name,
-        options.release_version,
-    });
-    const install_release = b.addInstallArtifact(exe, .{
-        .dest_dir = .{ .override = .prefix },
-        .dest_sub_path = release_asset_name,
-    });
-    musl_release_step.dependOn(&install_release.step);
-}
-
-fn configureExecutable(
-    exe: *std.Build.Step.Compile,
-    has_mpv: bool,
-    enable_lto: bool,
-) void {
-    if (has_mpv) {
-        exe.root_module.link_libc = true;
+    // This allows the user to pass arguments to the application in the build
+    // command itself, like this: `zig build run -- arg1 arg2 etc`
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
     }
-    exe.root_module.linkSystemLibrary("EGL", .{
-        .preferred_link_mode = .dynamic,
-    });
-    exe.root_module.linkSystemLibrary("wayland-egl", .{
-        .preferred_link_mode = .dynamic,
-    });
-    exe.root_module.linkSystemLibrary("GLESv2", .{
-        .preferred_link_mode = .dynamic,
-    });
-    if (enable_lto) {
-        exe.want_lto = true;
-    }
-}
 
-fn linkBundledDeps(
-    b: *std.Build,
-    exe: *std.Build.Step.Compile,
-    options: native_deps.Options,
-) !void {
-    exe.linkage = .static;
-    const artifacts = try native_deps.buildNativeDeps(b, options);
-    exe.step.dependOn(artifacts.step);
-    native_deps.linkNativeDeps(b, exe, artifacts);
-    if (options.asan) {
-        exe.root_module.linkSystemLibrary("asan", .{
-            .use_pkg_config = .no,
-            .preferred_link_mode = .static,
-        });
-    }
+    // Creates an executable that will run `test` blocks from the provided module.
+    // Here `mod` needs to define a target, which is why earlier we made sure to
+    // set the releative field.
+    const mod_tests = b.addTest(.{
+        .root_module = mod,
+    });
+
+    // A run step that will run the test executable.
+    const run_mod_tests = b.addRunArtifact(mod_tests);
+
+    // Creates an executable that will run `test` blocks from the executable's
+    // root module. Note that test executables only test one module at a time,
+    // hence why we have to create two separate ones.
+    const exe_tests = b.addTest(.{
+        .root_module = exe.root_module,
+    });
+
+    exe_tests.linkLibrary(libmimalloc);
+
+    // A run step that will run the second test executable.
+    const run_exe_tests = b.addRunArtifact(exe_tests);
+
+    // A top level step for running all tests. dependOn can be called multiple
+    // times and since the two run steps do not depend on one another, this will
+    // make the two of them run in parallel.
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_mod_tests.step);
+    test_step.dependOn(&run_exe_tests.step);
+
+    // Just like flags, top level steps are also listed in the `--help` menu.
+    //
+    // The Zig build system is entirely implemented in userland, which means
+    // that it cannot hook into private compiler APIs. All compilation work
+    // orchestrated by the build system will result in other Zig compiler
+    // subcommands being invoked with the right flags defined. You can observe
+    // these invocations when one fails (or you pass a flag to increase
+    // verbosity) to validate assumptions and diagnose problems.
+    //
+    // Lastly, the Zig build system is relatively simple and self-contained,
+    // and reading its source code will allow you to master it.
 }

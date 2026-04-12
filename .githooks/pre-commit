@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-echo "[pre-commit] zig build fmt-check"
-zig build fmt-check
-
-echo "[pre-commit] zig build ci"
-zig build ci
